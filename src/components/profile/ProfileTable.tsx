@@ -13,19 +13,18 @@
  *                                  ConfirmDeleteDialog
  */
 
-import { Suspense, useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
 import { ToastContainer, useToast } from "@/components/ui/toast";
-import { ProfileDetailSheet }  from "@/components/profile/ProfileDetailSheet";
-import { EditProfileModal }    from "@/components/profile/EditProfileModal";
+import { ProfileDetailSheet } from "@/components/profile/ProfileDetailSheet";
+import { EditProfileModal } from "@/components/profile/EditProfileModal";
 import { ConfirmDeleteDialog } from "@/components/profile/ConfirmDeleteDialog";
-import { ProfileGridView }     from "@/components/profile/ProfileGridView";
+import { ProfileGridView } from "@/components/profile/ProfileGridView";
 import {
   OverlayActionsContext,
   type OverlayActions,
 } from "@/components/profile/ProfileTableContext";
-import { useProfileOverlay }   from "@/shared/useProfileOverlay";
+import { useProfileOverlay } from "@/shared/useProfileOverlay";
 import { usePersistentPagination } from "@/shared/usePersistentPagination";
 import type { ProfileListItemDto } from "@/shared/dtos";
 
@@ -33,7 +32,7 @@ import type { ProfileListItemDto } from "@/shared/dtos";
 type ApiResponse = { profiles: ProfileListItemDto[]; nextCursor: string | null };
 
 async function fetchProfiles(cursor?: string): Promise<ApiResponse> {
-  const params = new URLSearchParams({ limit: "20" });
+  const params = new URLSearchParams({ limit: "10" });
   if (cursor) params.set("cursor", cursor);
   const res = await fetch(`/api/profiles?${params}`);
   if (!res.ok) throw new Error("Failed to load profiles");
@@ -49,22 +48,10 @@ function ProfileTableInner() {
   /* Data */
   const { data, isFetching, isError } = useQuery({
     queryKey: ["profiles", cursor],
-    queryFn:  () => fetchProfiles(cursor),
+    queryFn: () => fetchProfiles(cursor),
     placeholderData: (prev) => prev,
     staleTime: 5 * 60 * 1000,
   });
-
-  /* Prefetch next page as soon as current data arrives */
-  const prefetchNext = useCallback(
-    (next: string) =>
-      queryClient.prefetchQuery({
-        queryKey: ["profiles", next],
-        queryFn:  () => fetchProfiles(next),
-        staleTime: 5 * 60 * 1000,
-      }),
-    [queryClient]
-  );
-  if (data?.nextCursor) prefetchNext(data.nextCursor);
 
   const profiles = data?.profiles ?? [];
 
@@ -82,9 +69,9 @@ function ProfileTableInner() {
 
   const overlayActions = useMemo<OverlayActions>(
     () => ({
-      openView:   (id) => overlayRef.current.openView(id),
-      openEdit:   (p)  => overlayRef.current.openEdit(p),
-      openDelete: (p)  => overlayRef.current.openDelete(p),
+      openView: (id) => overlayRef.current.openView(id),
+      openEdit: (p) => overlayRef.current.openEdit(p),
+      openDelete: (p) => overlayRef.current.openDelete(p),
     }),
     [] // intentionally empty — stable forever
   );
@@ -128,15 +115,5 @@ function ProfileTableInner() {
 
 /* ─── Public export ──────────────────────────────────────────── */
 export function ProfileTable() {
-  return (
-    <Suspense
-      fallback={
-        <div className="flex items-center justify-center py-20">
-          <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
-        </div>
-      }
-    >
-      <ProfileTableInner />
-    </Suspense>
-  );
+  return <ProfileTableInner />;
 }

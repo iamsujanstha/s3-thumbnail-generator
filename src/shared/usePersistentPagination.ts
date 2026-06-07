@@ -3,24 +3,18 @@
 /**
  * usePersistentPagination
  * ─────────────────────────────────────────────────────────
- * Encapsulates cursor-based pagination state and persists the
- * current cursor in the URL search params so the user can
- * bookmark/share/refresh and land on the same page.
+ * Simple cursor-based pagination with useState.
  *
- * Design:
- *  - Single Responsibility: owns only pagination concerns
- *  - Open/Closed: callers pass their own router/search hooks,
- *    keeping this hook decoupled from Next.js internals
+ * Keeps a stack of previous cursors so the user can go back.
+ * State resets on page refresh — intentional, since presigned
+ * URLs expire anyway and a fresh load is always correct.
  * ─────────────────────────────────────────────────────────
  */
 
-import { useCallback, useMemo } from "react";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useState, useCallback } from "react";
 
 export interface PaginationState {
-  /** Current cursor sent to the API (undefined = first page) */
   cursor: string | undefined;
-  /** Stack of previous cursors for going back */
   cursorStack: string[];
 }
 
@@ -31,64 +25,28 @@ export interface PaginationActions {
 }
 
 export function usePersistentPagination(): PaginationState & PaginationActions {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
+  // cursor === undefined means "first page" (no cursor sent to the API)
+  const [cursor, setCursor] = useState<string | undefined>(undefined);
+  const [cursorStack, setCursorStack] = useState<string[]>([]);
 
-  // Cursor is stored in ?cursor=xxx
-  const cursor = searchParams.get("cursor") ?? undefined;
-
-  // The back-stack is stored as ?stack=a,b,c (comma-joined)
-  const cursorStack: string[] = useMemo(() => {
-    const raw = searchParams.get("stack");
-    if (!raw) return [];
-    return raw.split(",").filter(Boolean);
-  }, [searchParams]);
-
-  /** Build a new URL with updated params — preserves all other params */
-  const buildUrl = useCallback(
-    (updates: Record<string, string | null>) => {
-      const params = new URLSearchParams(searchParams.toString());
-      for (const [key, value] of Object.entries(updates)) {
-        if (value === null) {
-          params.delete(key);
-        } else {
-          params.set(key, value);
-        }
-      }
-      const qs = params.toString();
-      return qs ? `${pathname}?${qs}` : pathname;
-    },
-    [pathname, searchParams]
-  );
-
-  const goNext = useCallback(
-    (nextCursor: string) => {
-      const newStack = [...cursorStack, cursor ?? ""].join(",");
-      router.push(
-        buildUrl({
-          cursor: nextCursor,
-          stack: newStack || null,
-        })
-      );
-    },
-    [router, buildUrl, cursor, cursorStack]
-  );
+  const goNext = useCallback((nextCursor: string) => {
+    setCursorStack((stack) => [...stack, cursor ?? ""]);
+    setCursor(nextCursor);
+  }, [cursor]);
 
   const goPrev = useCallback(() => {
-    const stack = [...cursorStack];
-    const prev = stack.pop() ?? "";
-    router.push(
-      buildUrl({
-        cursor: prev || null,
-        stack: stack.join(",") || null,
-      })
-    );
-  }, [router, buildUrl, cursorStack]);
+    setCursorStack((stack) => {
+      const next = [...stack];
+      const prev = next.pop();           // remove last entry
+      setCursor(prev || undefined);      // "" means first page → undefined
+      return next;
+    });
+  }, []);
 
   const reset = useCallback(() => {
-    router.push(buildUrl({ cursor: null, stack: null }));
-  }, [router, buildUrl]);
+    setCursor(undefined);
+    setCursorStack([]);
+  }, []);
 
   return { cursor, cursorStack, goNext, goPrev, reset };
 }
