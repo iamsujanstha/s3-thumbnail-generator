@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { useEffect, useId, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -140,16 +139,18 @@ export function ProfileDetailSheet({ profileId, onClose, onEdit }: Props) {
 
           {data && !isFetching && (
             <div className="pb-8">
-              {/* Original image */}
+              {/* Original image — plain <img> so the browser disk-cache
+                  works correctly. next/image wraps in a span and reconciles
+                  on every render, breaking the cache even with a stable src. */}
               <div className="relative aspect-[4/3] w-full bg-slate-100">
                 {data.originalUrl ? (
-                  <Image
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
                     src={data.originalUrl}
                     alt={`${data.fullName} — profile photo`}
-                    fill
-                    className="object-cover"
-                    sizes="(max-width: 768px) 100vw, 448px"
-                    unoptimized
+                    className="h-full w-full object-cover"
+                    loading="eager"
+                    decoding="async"
                   />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center bg-slate-100">

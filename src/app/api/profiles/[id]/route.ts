@@ -4,11 +4,14 @@ import { S3StorageService } from "@/infrastructure/storage/s3/S3StorageService";
 import { UpdateProfileUseCase } from "@/core/use-cases/UpdateProfileUseCase";
 import { DeleteProfileUseCase } from "@/core/use-cases/DeleteProfileUseCase";
 import { updateProfileSchema } from "@/shared/dtos";
-import { toThumbnailKey } from "@/shared/utils";
+import { toThumbnailKey, toProxyUrl } from "@/shared/utils";
 
 export const runtime = "nodejs";
 
-// GET /api/profiles/:id — returns profile with both originalUrl and thumbnailUrl
+// GET /api/profiles/:id
+// Returns stable proxy URLs for both images — browser caches them forever.
+// The proxy route (/api/img/[...key]) fetches from S3 server-side and sets
+// long Cache-Control headers.
 export async function GET(
   _request: Request,
   { params }: { params: { id: string } }
@@ -21,11 +24,20 @@ export async function GET(
       return NextResponse.json({ error: "Profile not found." }, { status: 404 });
     }
 
-    const storage = new S3StorageService();
-    const [originalUrl, thumbnailUrl] = await Promise.all([
-      storage.createGetUrl(profile.imageKey),
-      storage.createGetUrl(toThumbnailKey(profile.imageKey))
-    ]);
+    // Use proxy URLs for both — stable, same-origin, long-cached
+    const thumbnailKey = toThumbnailKey(profile.imageKey);
+    const thumbnailUrl = toProxyUrl(thumbnailKey);
+    const originalUrl  = toProxyUrl(profile.imageKey);
+
+    // Check thumbnail exists; fall back to original proxy if not yet generated
+    let resolvedThumbnailUrl = thumbnailUrl;
+    try {
+      const storage = new S3StorageService();
+      const exists = await storage.keyExists(thumbnailKey);
+      if (!exists) resolvedThumbnailUrl = originalUrl;
+    } catch {
+      resolvedThumbnailUrl = originalUrl;
+    }
 
     return NextResponse.json({
       id: profile.id,
@@ -34,9 +46,9 @@ export async function GET(
       company: profile.company,
       imageKey: profile.imageKey,
       originalUrl,
-      thumbnailUrl,
+      thumbnailUrl: resolvedThumbnailUrl,
       createdAt: profile.createdAt.toISOString(),
-      updatedAt: profile.updatedAt.toISOString()
+      updatedAt: profile.updatedAt.toISOString(),
     });
   } catch (error) {
     console.error("Failed to fetch profile", error);
