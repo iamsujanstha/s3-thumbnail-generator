@@ -50,11 +50,15 @@ const config: Config = {
           from: { transform: "translateX(100%)" },
           to:   { transform: "translateX(0)" },
         },
+        shimmer: {
+          "0%":   { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(100%)" },
+        },
       },
       animation: {
-        "fade-in":       "fade-in 200ms cubic-bezier(0.16,1,0.3,1) both",
-        "scale-in":      "scale-in 200ms cubic-bezier(0.16,1,0.3,1) both",
-        "slide-in-right":"slide-in-right 280ms cubic-bezier(0.16,1,0.3,1) both",
+        "fade-in":        "fade-in 200ms cubic-bezier(0.16,1,0.3,1) both",
+        "scale-in":       "scale-in 200ms cubic-bezier(0.16,1,0.3,1) both",
+        "slide-in-right": "slide-in-right 280ms cubic-bezier(0.16,1,0.3,1) both",
       },
     },
   },

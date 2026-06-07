@@ -146,7 +146,7 @@ export function ProfileDetailSheet({ profileId, onClose, onEdit }: Props) {
                 src={data.originalUrl}
                 alt={`${data.fullName} — profile photo`}
                 variant="hero"
-                eager
+                priority
               />
 
               {/* Info */}
