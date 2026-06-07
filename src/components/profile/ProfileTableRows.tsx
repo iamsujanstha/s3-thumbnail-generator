@@ -3,21 +3,22 @@
 /**
  * ProfileTableRows
  * All table body primitives:
- *   – AvatarCell   plain memoised <img> — never unmounts on state changes
- *   – ProfileRow   one table row, reads overlay actions from context
+ *   – AvatarCell         uses ProfileImage — handles loading/error/loaded
+ *   – ProfileRow         one table row, reads overlay actions from context
  *   – TableSkeletonRows  loading state
  *   – TableEmptyState    zero-results state
  */
 import { memo } from "react";
-import { Eye, Pencil, Trash2, UserCircle2, Users } from "lucide-react";
+import { Eye, Pencil, Trash2, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ProfileImage } from "@/components/ui/ProfileImage";
 import { useOverlayActions } from "@/components/profile/ProfileTableContext";
 import type { ProfileListItemDto } from "@/shared/dtos";
 
 /* ─── Avatar ─────────────────────────────────────────────────────
- * Receives primitives only → memo's shallow-equal check is a
- * direct string comparison, guaranteed to skip re-renders.
+ * Receives primitives only → memo's shallow-equal is a direct
+ * string comparison → guaranteed skip on unrelated state changes.
  * ─────────────────────────────────────────────────────────────── */
 export const AvatarCell = memo(function AvatarCell({
   thumbnailUrl,
@@ -27,28 +28,12 @@ export const AvatarCell = memo(function AvatarCell({
   fullName: string;
 }) {
   return (
-    <div
-      className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full ring-2 ring-slate-100"
-      aria-hidden="true"
-    >
-      {thumbnailUrl ? (
-        // Plain <img> — browser HTTP cache works correctly on the stable
-        // proxy URL; next/image wrapper span would cause extra reconciliation.
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={thumbnailUrl}
-          alt={fullName}
-          width={40}
-          height={40}
-          className="h-full w-full object-cover"
-          loading="lazy"
-          decoding="async"
-        />
-      ) : (
-        <div className="flex h-full w-full items-center justify-center bg-slate-100">
-          <UserCircle2 className="h-6 w-6 text-slate-400" />
-        </div>
-      )}
+    <div aria-hidden="true">
+      <ProfileImage
+        src={thumbnailUrl}
+        alt={fullName}
+        variant="avatar"
+      />
     </div>
   );
 });

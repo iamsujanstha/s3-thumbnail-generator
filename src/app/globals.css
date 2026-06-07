@@ -91,6 +91,11 @@ body {
   to   { transform: scale(1);    opacity: 1; }
 }
 
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 .animate-in {
   animation-duration: var(--duration-normal);
   animation-fill-mode: both;

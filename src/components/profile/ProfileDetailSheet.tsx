@@ -4,11 +4,12 @@ import { useEffect, useId, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   X, Pencil, BriefcaseBusiness, Building2,
-  Calendar, Clock, Loader2, AlertTriangle, UserCircle2,
+  Calendar, Clock, Loader2, AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ProfileImage } from "@/components/ui/ProfileImage";
 import type { ProfileDetailDto } from "@/shared/dtos";
 
 type Props = {
@@ -139,25 +140,14 @@ export function ProfileDetailSheet({ profileId, onClose, onEdit }: Props) {
 
           {data && !isFetching && (
             <div className="pb-8">
-              {/* Original image — plain <img> so the browser disk-cache
-                  works correctly. next/image wraps in a span and reconciles
-                  on every render, breaking the cache even with a stable src. */}
-              <div className="relative aspect-[4/3] w-full bg-slate-100">
-                {data.originalUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={data.originalUrl}
-                    alt={`${data.fullName} — profile photo`}
-                    className="h-full w-full object-cover"
-                    loading="eager"
-                    decoding="async"
-                  />
-                ) : (
-                  <div className="flex h-full w-full items-center justify-center bg-slate-100">
-                    <UserCircle2 className="h-20 w-20 text-slate-300" />
-                  </div>
-                )}
-              </div>
+              {/* Original image — ProfileImage handles loading shimmer,
+                  fade-in on load, and broken-image error state */}
+              <ProfileImage
+                src={data.originalUrl}
+                alt={`${data.fullName} — profile photo`}
+                variant="hero"
+                eager
+              />
 
               {/* Info */}
               <div className="space-y-5 px-6 pt-6">
