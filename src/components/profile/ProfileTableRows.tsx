@@ -1,13 +1,5 @@
 "use client";
 
-/**
- * ProfileTableRows
- * All table body primitives:
- *   – AvatarCell         uses ProfileImage — handles loading/error/loaded
- *   – ProfileRow         one table row, reads overlay actions from context
- *   – TableSkeletonRows  loading state
- *   – TableEmptyState    zero-results state
- */
 import { memo } from "react";
 import { Eye, Pencil, Trash2, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,10 +8,6 @@ import { ProfileImage } from "@/components/ui/ProfileImage";
 import { useOverlayActions } from "@/components/profile/ProfileTableContext";
 import type { ProfileListItemDto } from "@/shared/dtos";
 
-/* ─── Avatar ─────────────────────────────────────────────────────
- * Receives primitives only → memo's shallow-equal is a direct
- * string comparison → guaranteed skip on unrelated state changes.
- * ─────────────────────────────────────────────────────────────── */
 export const AvatarCell = memo(function AvatarCell({
   thumbnailUrl,
   fullName,

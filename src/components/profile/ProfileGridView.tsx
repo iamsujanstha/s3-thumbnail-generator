@@ -1,12 +1,5 @@
 "use client";
 
-/**
- * ProfileGridView
- * Pure presentational table + search bar + pagination footer.
- *
- * memo()-wrapped: never re-renders when overlay/modal state changes —
- * those live in a sibling component (OverlayLayerWithRef).
- */
 import { memo, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Loader2, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";

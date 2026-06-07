@@ -1,11 +1,3 @@
-/**
- * ProfileTableContext
- * Defines the context that lets table rows trigger overlay actions
- * (view / edit / delete) without holding that state themselves.
- *
- * Kept in its own file so it can be imported by both
- * ProfileGridView and ProfileTable without circular deps.
- */
 import { createContext, useContext } from "react";
 import type { ProfileListItemDto } from "@/shared/dtos";
 

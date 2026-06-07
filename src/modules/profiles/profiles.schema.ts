@@ -1,9 +1,6 @@
-// Re-exports for backward compatibility.
-// New code should import directly from @/types/dtos
-export type { ProfileListItemDto, ProfileDetailDto } from "@/types/dtos";
-
-// Zod schemas (server-only — kept here for existing client-side DTO types)
 import { z } from "zod";
+
+const imageMimeTypes = ["image/jpeg", "image/png", "image/webp"] as const;
 
 export const createProfileSchema = z.object({
   fullName:  z.string().trim().min(2).max(120),
@@ -20,10 +17,16 @@ export const updateProfileSchema = z.object({
 
 export const presignUploadSchema = z.object({
   filename:    z.string().trim().min(1).max(180),
-  contentType: z.enum(["image/jpeg", "image/png", "image/webp"] as const),
+  contentType: z.enum(imageMimeTypes),
   size:        z.number().int().positive().max(5 * 1024 * 1024),
 });
 
-export type CreateProfileDto  = z.infer<typeof createProfileSchema>;
-export type UpdateProfileDto  = z.infer<typeof updateProfileSchema>;
-export type PresignUploadDto  = z.infer<typeof presignUploadSchema>;
+export const listQuerySchema = z.object({
+  limit:  z.coerce.number().int().min(1).max(50).default(12),
+  cursor: z.string().optional(),
+});
+
+export type CreateProfileDto = z.infer<typeof createProfileSchema>;
+export type UpdateProfileDto = z.infer<typeof updateProfileSchema>;
+export type PresignUploadDto = z.infer<typeof presignUploadSchema>;
+export type ListQueryDto     = z.infer<typeof listQuerySchema>;

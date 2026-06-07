@@ -1,19 +1,6 @@
 "use client";
 
-/**
- * ProfileTable — public entry point
- *
- * Responsibilities (each in its own module):
- *   Data fetching + pagination  → this file (ProfileTableInner)
- *   Context definition          → ProfileTableContext.ts
- *   Table UI + search           → ProfileGridView.tsx
- *   Row / avatar / skeleton     → ProfileTableRows.tsx
- *   Overlay state + delete      → useProfileOverlay.ts (shared hook)
- *   Modals / sheet              → ProfileDetailSheet, EditProfileModal,
- *                                  ConfirmDeleteDialog
- */
-
-import { useCallback, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ToastContainer, useToast } from "@/components/ui/toast";
 import { ProfileDetailSheet } from "@/components/profile/ProfileDetailSheet";
@@ -45,12 +32,14 @@ function ProfileTableInner() {
   const { toasts, push: pushToast, dismiss: dismissToast } = useToast();
   const { cursor, cursorStack, goNext, goPrev } = usePersistentPagination();
 
-  /* Data */
+  /* Data — staleTime: 0 on page 1 so navigating back always shows
+     the latest profiles (including any just created on the home page).
+     Subsequent pages keep a 5-min cache since they're less likely to change. */
   const { data, isFetching, isError } = useQuery({
     queryKey: ["profiles", cursor],
-    queryFn: () => fetchProfiles(cursor),
+    queryFn:  () => fetchProfiles(cursor),
     placeholderData: (prev) => prev,
-    staleTime: 5 * 60 * 1000,
+    staleTime: cursor ? 5 * 60 * 1000 : 0,
   });
 
   const profiles = data?.profiles ?? [];
@@ -58,12 +47,6 @@ function ProfileTableInner() {
   /* Overlay state (view / edit / delete) lives in its own hook */
   const overlay = useProfileOverlay(profiles, pushToast);
 
-  /*
-   * Stable overlay actions for the context.
-   * We write the real setters into a mutable ref so the useMemo
-   * value below is created once and never changes reference —
-   * preventing any table row from re-rendering when a modal opens.
-   */
   const overlayRef = useRef(overlay.handlers);
   overlayRef.current = overlay.handlers;
 

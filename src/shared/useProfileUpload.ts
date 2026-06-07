@@ -1,15 +1,7 @@
 "use client";
 
-/**
- * useProfileUpload
- * Encapsulates the complete 3-step upload flow:
- *   1. POST /api/s3/presign   → get signed PUT URL
- *   2. PUT  <image>           → upload directly to S3
- *   3. POST /api/profiles     → save profile record
- *
- * Returns state + actions; the component owns zero business logic.
- */
 import { type FormEvent, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 export type UploadStep =
   | "idle"
@@ -36,6 +28,7 @@ export const STEP_LABELS: Record<UploadStep, string> = {
 };
 
 export function useProfileUpload() {
+  const queryClient  = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [form, setForm] = useState<ProfileFormState>({
@@ -43,9 +36,9 @@ export function useProfileUpload() {
     jobTitle: "",
     company:  "",
   });
-  const [file, setFile]           = useState<File | null>(null);
-  const [step, setStep]           = useState<UploadStep>("idle");
-  const [error, setError]         = useState<string | null>(null);
+  const [file, setFile]             = useState<File | null>(null);
+  const [step, setStep]             = useState<UploadStep>("idle");
+  const [error, setError]           = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   const previewUrl = useMemo(
@@ -108,7 +101,7 @@ export function useProfileUpload() {
         imageKey:  string;
       };
 
-      /* 2 — Upload */
+      /* 2 — Upload to S3 */
       setStep("uploading");
       const uploadRes = await fetch(uploadUrl, {
         method:  "PUT",
@@ -124,7 +117,7 @@ export function useProfileUpload() {
         );
       }
 
-      /* 3 — Save */
+      /* 3 — Save profile */
       setStep("saving");
       const profileRes = await fetch("/api/profiles", {
         method:  "POST",
@@ -134,7 +127,10 @@ export function useProfileUpload() {
       if (!profileRes.ok)
         throw new Error("Profile could not be saved after the upload.");
 
-      /* 4 — Done */
+      /* 4 — Invalidate the profiles list cache so /profiles always shows
+             the newly created profile at the top when navigated to next. */
+      await queryClient.invalidateQueries({ queryKey: ["profiles"] });
+
       setStep("complete");
       setForm({ fullName: "", jobTitle: "", company: "" });
       clearFile();
@@ -145,15 +141,10 @@ export function useProfileUpload() {
   }
 
   return {
-    /* Refs */
     fileInputRef,
-    /* Form state */
     form, updateField,
-    /* File state */
     file, previewUrl, isDragging,
-    /* Upload step */
     step, isBusy, error,
-    /* Actions */
     selectFile, clearFile, handleSubmit,
     setIsDragging,
   };

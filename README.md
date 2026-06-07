@@ -2,14 +2,135 @@
 
 Production-oriented Next.js profile management app using App Router, TypeScript, Tailwind CSS, MongoDB, direct-to-S3 uploads, and an asynchronous thumbnail Lambda.
 
-## Architecture
+---
 
-- `src/app`: Next.js delivery layer and API routes.
-- `src/components`: presentation components and profile UI.
-- `src/core`: domain entities, repository contracts, and use cases.
-- `src/infrastructure`: MongoDB and S3 adapters.
-- `src/shared`: DTO schemas, environment validation, and utility functions.
-- `lambda/thumbnail-generator`: standalone Node.js Lambda using `sharp`.
+## Folder Structure
+
+```
+Thumbnail-app/
+├── lambda/
+│   └── thumbnail-generator/         # Standalone AWS Lambda (Node.js + sharp)
+│       ├── index.mjs                # Handler — resize raw upload → WebP thumbnail
+│       ├── package.json
+│       └── SETUP.md                 # Step-by-step AWS setup guide
+│
+└── src/
+    ├── app/                         # Next.js App Router — pages + API routes
+    │   ├── api/
+    │   │   ├── profiles/
+    │   │   │   ├── route.ts         # GET /api/profiles  POST /api/profiles
+    │   │   │   └── [id]/route.ts    # GET · PATCH · DELETE /api/profiles/:id
+    │   │   ├── s3/presign/route.ts  # POST /api/s3/presign
+    │   │   └── img/[...key]/route.ts# GET /api/img/* (S3 image proxy)
+    │   ├── profiles/
+    │   │   ├── page.tsx             # /profiles — profile directory page
+    │   │   └── error.tsx            # Error boundary
+    │   ├── layout.tsx               # Root layout (QueryProvider, skip-nav)
+    │   ├── page.tsx                 # / — create profile page
+    │   └── globals.css
+    │
+    ├── modules/                     # NestJS-style feature modules (server-only)
+    │   ├── profiles/
+    │   │   ├── profiles.controller.ts  # Parse request → call service → respond
+    │   │   ├── profiles.service.ts     # Business logic + orchestration
+    │   │   ├── profiles.repository.ts  # MongoDB queries (all DB access lives here)
+    │   │   └── profiles.schema.ts      # Zod validation schemas + inferred types
+    │   └── storage/
+    │       └── storage.service.ts      # S3 operations (put/get/head/stream)
+    │
+    ├── components/                  # React UI components (client-side)
+    │   ├── profile/
+    │   │   ├── ProfileTable.tsx        # Entry point — wires data + context
+    │   │   ├── ProfileGridView.tsx     # Table + search + pagination UI
+    │   │   ├── ProfileTableRows.tsx    # AvatarCell · ProfileRow · skeleton · empty
+    │   │   ├── ProfileTableContext.ts  # Overlay actions context (stable refs)
+    │   │   ├── ProfileForm.tsx         # Create profile form shell
+    │   │   ├── ImageDropZone.tsx       # Drag-and-drop image picker
+    │   │   ├── ProfileDetailSheet.tsx  # Slide-in view panel
+    │   │   ├── EditProfileModal.tsx    # Edit text fields modal
+    │   │   └── ConfirmDeleteDialog.tsx # Delete confirmation dialog
+    │   ├── ui/
+    │   │   ├── ProfileImage.tsx        # Generic image (shimmer → fade-in → error)
+    │   │   ├── button.tsx
+    │   │   ├── badge.tsx
+    │   │   ├── card.tsx
+    │   │   ├── input.tsx
+    │   │   ├── skeleton.tsx
+    │   │   └── toast.tsx
+    │   └── QueryProvider.tsx          # TanStack Query client provider
+    │
+    ├── lib/                         # Pure infrastructure utilities (server + client)
+    │   ├── env.ts                   # Zod-validated env vars (cached singleton)
+    │   ├── mongo.ts                 # MongoDB connection pool singleton
+    │   └── utils.ts                 # cn() · sanitizeFilename() · toProxyUrl()
+    │
+    ├── types/
+    │   └── dtos.ts                  # Shared TypeScript types (client + server)
+    │
+    └── shared/                      # Client-side hooks + re-exports
+        ├── useProfileUpload.ts      # 3-step upload flow hook (presign → S3 → save)
+        ├── useProfileOverlay.ts     # Modal state + delete mutation hook
+        ├── usePersistentPagination.ts # Cursor-based pagination hook
+        ├── dtos.ts                  # Re-exports → @/types/dtos (+ Zod schemas)
+        ├── utils.ts                 # Re-exports → @/lib/utils
+        └── env.ts                   # Re-exports → @/lib/env
+```
+
+### Request flow — create profile
+
+```
+Browser
+  │  POST /api/s3/presign
+  ▼
+app/api/s3/presign/route.ts        (1 line — delegates)
+  ▼
+modules/profiles/profiles.controller.ts   presignUpload()
+  ▼
+modules/profiles/profiles.service.ts      presignUpload()
+  ▼
+modules/storage/storage.service.ts        createPutUrl()
+  ▼
+AWS S3 ← browser PUTs image directly (no server in the middle)
+  ▼
+S3 event → Lambda thumbnail-generator → writes WebP thumbnail
+```
+
+### Request flow — list profiles
+
+```
+Browser  GET /api/profiles?limit=10
+  ▼
+app/api/profiles/route.ts          (1 line — delegates)
+  ▼
+modules/profiles/profiles.controller.ts   listProfiles()
+  ▼
+modules/profiles/profiles.service.ts      list()
+  ▼
+modules/profiles/profiles.repository.ts   findMany()   ← MongoDB
+  ▼
+Service maps records to DTOs with stable proxy image URLs
+  ▼
+Browser fetches images via /api/img/[...key]
+  ▼
+app/api/img/[...key]/route.ts → modules/storage/storage.service.ts → S3
+```
+
+---
+
+## Architecture Decisions
+
+| Decision | Reason |
+|---|---|
+| NestJS-style modules in `src/modules/` | Controller → Service → Repository separation without a full framework |
+| Route files are 1–3 lines | All logic lives in the module layer; routes are just adapters |
+| Image proxy at `/api/img/` | Stable same-origin URLs → browser HTTP cache works; no CORS errors; presigned URLs stay server-side |
+| `staleTime: 0` on page 1 | Ensures the list always refetches after creating a profile |
+| `memo()` + context for table rows | Overlay state changes (open modal) never cause image re-renders |
+| Plain `<img>` replaced with `next/image` | Automatic WebP/AVIF, responsive srcset, blur placeholder |
+| `src/lib/` for infrastructure | Shared by both modules and client hooks without circular deps |
+| `src/shared/` re-exports `src/lib/` | Backward-compatible path aliases — existing imports unchanged |
+
+---
 
 ## Environment
 
@@ -21,69 +142,42 @@ cp .env.example .env.local
 
 Update `.env.local` with real values:
 
-```bash
+```env
 MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/profile-management
 AWS_ACCESS_KEY_ID=your-access-key
 AWS_SECRET_ACCESS_KEY=your-secret-key
-AWS_REGION=us-east-1
+AWS_REGION=ap-south-1
 S3_BUCKET_NAME=your-profile-image-bucket
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
-For Vercel, add the same values in Project Settings -> Environment Variables. Set `NEXT_PUBLIC_APP_URL` to your deployed app URL, for example `https://your-app.vercel.app`.
+For Vercel, add the same values in **Project Settings → Environment Variables**. Set `NEXT_PUBLIC_APP_URL` to your deployed app URL.
+
+---
 
 ## AWS Setup Overview
 
 The application uses this image workflow:
 
-1. The browser asks `/api/s3/presign` for a secure S3 upload URL.
-2. The browser uploads the original image directly to S3 under `uploads/raw/`.
-3. The app saves only the raw S3 key in MongoDB.
-4. S3 automatically invokes the Lambda when a new raw object is created.
-5. Lambda creates a 150x150 WebP thumbnail under `uploads/thumbnails/`.
-6. The profile listing API signs thumbnail URLs for fast frontend display.
+1. Browser asks `/api/s3/presign` for a secure S3 upload URL
+2. Browser uploads the original image directly to S3 under `uploads/raw/`
+3. App saves only the raw S3 key in MongoDB (never stores URLs)
+4. S3 automatically invokes Lambda when a new raw object is created
+5. Lambda creates a 150×150 WebP thumbnail under `uploads/thumbnails/`
+6. Profile listing returns stable `/api/img/` proxy URLs — browser caches forever
 
-## Create The S3 Bucket
+See `lambda/thumbnail-generator/SETUP.md` for the complete step-by-step AWS setup including IAM, CORS, S3 triggers, and Lambda deployment.
 
-Create one private bucket for profile images. The bucket does not need public read access because the app returns time-limited signed URLs.
-
-Using AWS CLI:
-
-```bash
-aws s3api create-bucket \
-  --bucket your-profile-image-bucket \
-  --region us-east-1
-```
-
-For regions other than `us-east-1`, include the location constraint:
-
-```bash
-aws s3api create-bucket \
-  --bucket your-profile-image-bucket \
-  --region ap-south-1 \
-  --create-bucket-configuration LocationConstraint=ap-south-1
-```
-
-Recommended bucket settings:
-
-- Keep Block Public Access enabled.
-- Enable default encryption with SSE-S3 or SSE-KMS.
-- Enable versioning if you want recovery for overwritten/deleted images.
-- Do not enable static website hosting.
-
-Create these logical prefixes by uploading through the app or by creating empty marker folders in the console:
-
-- `uploads/raw/`
-- `uploads/thumbnails/`
+---
 
 ## S3 CORS
 
-Configure the bucket to allow browser `PUT` uploads from the Vercel domain and local development origin:
+Allow browser `PUT` uploads from your origins:
 
 ```json
 [
   {
-    "AllowedHeaders": ["*"],
+    "AllowedHeaders": ["Content-Type", "x-amz-date", "x-amz-content-sha256"],
     "AllowedMethods": ["PUT", "GET"],
     "AllowedOrigins": ["http://localhost:3000", "https://your-app.vercel.app"],
     "ExposeHeaders": ["ETag"],
@@ -92,59 +186,44 @@ Configure the bucket to allow browser `PUT` uploads from the Vercel domain and l
 ]
 ```
 
-Using AWS CLI:
+**Path in AWS Console:** `S3 → your-bucket → Permissions → Cross-origin resource sharing (CORS)`
 
-```bash
-aws s3api put-bucket-cors \
-  --bucket your-profile-image-bucket \
-  --cors-configuration file://cors.json
-```
+---
 
-Use the same JSON shown above in `cors.json`.
+## IAM Permissions
 
-## Create IAM Permissions
-
-The Next.js app needs permissions to create signed `PutObject` URLs for raw uploads and signed `GetObject` URLs for raw/thumbnail reads.
-
-Attach a policy like this to the IAM user represented by `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`:
+**App IAM user** (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`):
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ProfileImageObjectAccess",
       "Effect": "Allow",
-      "Action": ["s3:PutObject", "s3:GetObject"],
-      "Resource": [
-        "arn:aws:s3:::your-profile-image-bucket/uploads/raw/*",
-        "arn:aws:s3:::your-profile-image-bucket/uploads/thumbnails/*"
-      ]
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:HeadObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::your-profile-image-bucket/*"
     }
   ]
 }
 ```
 
-The Lambda execution role needs read access to raw uploads and write access to thumbnails:
+**Lambda execution role:**
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ReadRawProfileImages",
       "Effect": "Allow",
       "Action": ["s3:GetObject"],
       "Resource": "arn:aws:s3:::your-profile-image-bucket/uploads/raw/*"
     },
     {
-      "Sid": "WriteProfileThumbnails",
       "Effect": "Allow",
       "Action": ["s3:PutObject"],
       "Resource": "arn:aws:s3:::your-profile-image-bucket/uploads/thumbnails/*"
     },
     {
-      "Sid": "WriteLogs",
       "Effect": "Allow",
       "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
       "Resource": "*"
@@ -153,228 +232,87 @@ The Lambda execution role needs read access to raw uploads and write access to t
 }
 ```
 
-## Create The Lambda Function
+---
 
-The thumbnail generator lives in:
+## Lambda Deployment
 
-```text
-lambda/thumbnail-generator/index.mjs
-```
-
-Recommended Lambda settings:
-
-- Runtime: Node.js 20.x
-- Handler: `index.handler`
-- Memory: 512 MB or higher
-- Timeout: 30 seconds
-- Architecture: `arm64` or `x86_64`
-
-Because the Lambda uses `sharp`, install dependencies in the Lambda folder for the same operating system and architecture that Lambda will use.
-
-For `arm64` Lambda:
+The thumbnail generator lives in `lambda/thumbnail-generator/`. It must be compiled for `linux-x64` regardless of your dev machine OS:
 
 ```bash
 cd lambda/thumbnail-generator
-npm install --omit=dev --os=linux --cpu=arm64
-zip -r thumbnail-generator.zip index.mjs package.json package-lock.json node_modules
+npm install --os=linux --cpu=x64 --libc=glibc sharp
+npm install
+zip -r ../thumbnail-generator.zip index.mjs node_modules package.json
 ```
 
-For `x86_64` Lambda:
+**Recommended Lambda settings:**
 
-```bash
-cd lambda/thumbnail-generator
-npm install --omit=dev --os=linux --cpu=x64
-zip -r thumbnail-generator.zip index.mjs package.json package-lock.json node_modules
-```
+| Setting | Value |
+|---|---|
+| Runtime | Node.js 22.x |
+| Handler | `index.handler` |
+| Architecture | `x86_64` |
+| Memory | 512 MB |
+| Timeout | 30 sec |
 
-Create a Lambda trust policy named `lambda-trust-policy.json`:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "lambda.amazonaws.com"
-      },
-      "Action": "sts:AssumeRole"
-    }
-  ]
-}
-```
-
-Create the Lambda execution role:
-
-```bash
-aws iam create-role \
-  --role-name profile-thumbnail-generator-role \
-  --assume-role-policy-document file://lambda-trust-policy.json
-```
-
-Attach the Lambda permissions policy from the previous IAM section to that role.
-
-Then create the function:
-
-```bash
-aws lambda create-function \
-  --function-name profile-thumbnail-generator \
-  --runtime nodejs20.x \
-  --handler index.handler \
-  --role arn:aws:iam::YOUR_ACCOUNT_ID:role/profile-thumbnail-generator-role \
-  --zip-file fileb://thumbnail-generator.zip \
-  --timeout 30 \
-  --memory-size 512 \
-  --architectures arm64
-```
-
-If you update the Lambda code later:
+Deploy via CLI:
 
 ```bash
 aws lambda update-function-code \
-  --function-name profile-thumbnail-generator \
-  --zip-file fileb://thumbnail-generator.zip
+  --function-name thumbnail-generator \
+  --zip-file fileb://../thumbnail-generator.zip \
+  --region ap-south-1
 ```
 
-## Add The S3 Trigger
+**S3 trigger:** prefix `uploads/raw/`, event type `s3:ObjectCreated:Put`.
 
-Configure an S3 event notification that invokes Lambda when a raw image is uploaded.
+---
 
-Use this event notification setup:
+## MongoDB
 
-- Event type: `s3:ObjectCreated:*`
-- Prefix: `uploads/raw/`
-- Destination: `profile-thumbnail-generator`
+The app writes to a `profiles` collection. No manual setup needed — indexes are created on first use.
 
-The Lambda writes optimized thumbnails to `uploads/thumbnails/{raw-filename}.webp`.
+Stored document shape:
 
-Before S3 can invoke Lambda, grant invoke permission:
-
-```bash
-aws lambda add-permission \
-  --function-name profile-thumbnail-generator \
-  --statement-id allow-s3-thumbnail-trigger \
-  --action lambda:InvokeFunction \
-  --principal s3.amazonaws.com \
-  --source-arn arn:aws:s3:::your-profile-image-bucket
-```
-
-Then create `notification.json`:
-
-```json
+```ts
 {
-  "LambdaFunctionConfigurations": [
-    {
-      "Id": "CreateProfileThumbnailFromRawUpload",
-      "LambdaFunctionArn": "arn:aws:lambda:us-east-1:YOUR_ACCOUNT_ID:function:profile-thumbnail-generator",
-      "Events": ["s3:ObjectCreated:*"],
-      "Filter": {
-        "Key": {
-          "FilterRules": [
-            {
-              "Name": "prefix",
-              "Value": "uploads/raw/"
-            }
-          ]
-        }
-      }
-    }
-  ]
+  fullName:  string
+  jobTitle:  string
+  company:   string
+  imageKey:  string   // e.g. "uploads/raw/{uuid}-avatar.png"
+  createdAt: Date
+  updatedAt: Date
 }
 ```
 
-Apply it:
-
-```bash
-aws s3api put-bucket-notification-configuration \
-  --bucket your-profile-image-bucket \
-  --notification-configuration file://notification.json
-```
-
-Console path:
-
-1. Open S3 -> your bucket -> Properties.
-2. Find Event notifications.
-3. Create event notification.
-4. Set prefix to `uploads/raw/`.
-5. Select all object create events or `s3:ObjectCreated:*`.
-6. Choose Lambda function `profile-thumbnail-generator`.
-7. Save changes.
-
-## MongoDB Setup
-
-Create a MongoDB database for the app, then put the connection string in `MONGODB_URI`.
-
-The app writes profile documents into the `profiles` collection. You do not need to create the collection manually; the repository creates the collection/index on first use.
-
-Stored profile documents contain:
-
-- `fullName`
-- `jobTitle`
-- `company`
-- `imageKey`, for example `uploads/raw/{uuid}-avatar.png`
-- `createdAt`
-- `updatedAt`
-
-The app intentionally stores only S3 keys, not public image URLs.
+---
 
 ## Run Locally
 
-Install dependencies:
-
 ```bash
 npm install
-```
-
-Start the app:
-
-```bash
 npm run dev
 ```
 
-Open:
+Open `http://localhost:3000`.
 
-```text
-http://localhost:3000
-```
-
-## Verify The Full Thumbnail Flow
-
-1. Start the app locally.
-2. Open `http://localhost:3000`.
-3. Fill in Full Name, Job Title, and Company.
-4. Upload a JPG, PNG, or WebP image under 5 MB.
-5. Submit the form.
-6. Confirm a new object appears in S3 under `uploads/raw/`.
-7. Wait a few seconds for Lambda to run.
-8. Confirm a new thumbnail appears under `uploads/thumbnails/` with the `.webp` extension.
-9. Open `http://localhost:3000/profiles`.
-10. Confirm the listing shows the optimized thumbnail image.
-
-If thumbnails are not created:
-
-- Check the Lambda CloudWatch logs.
-- Confirm the S3 event notification prefix is exactly `uploads/raw/`.
-- Confirm Lambda has `s3:GetObject` for `uploads/raw/*`.
-- Confirm Lambda has `s3:PutObject` for `uploads/thumbnails/*`.
-- Confirm the uploaded object is a valid image.
-- Confirm the Lambda package includes `node_modules/sharp`.
-
-## Deploy To Vercel
-
-1. Push the repository to GitHub.
-2. Import the project in Vercel.
-3. Add all environment variables from `.env.example`.
-4. Set `NEXT_PUBLIC_APP_URL` to the production Vercel URL.
-5. Deploy.
-6. Update S3 CORS `AllowedOrigins` to include the production Vercel URL.
+---
 
 ## Useful Commands
 
-Validate the app:
-
 ```bash
-npm run typecheck
-npm run lint
-npm run build
+npm run typecheck   # TypeScript check
+npm run lint        # ESLint
+npm run build       # Production build
 ```
+
+---
+
+## Deploy to Vercel
+
+1. Push the repository to GitHub
+2. Import the project in Vercel
+3. Add all environment variables from `.env.example`
+4. Set `NEXT_PUBLIC_APP_URL` to the production Vercel URL
+5. Deploy
+6. Update S3 CORS `AllowedOrigins` to include the production URL
