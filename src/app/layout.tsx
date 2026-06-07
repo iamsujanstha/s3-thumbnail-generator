@@ -4,7 +4,7 @@ import { QueryProvider } from "@/components/QueryProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: { default: "Profile Studio", template: "%s · Profile Studio" },
+  title: { default: "S3 Thumbnail Generator", template: "%s · S3 Thumbnail Generator" },
   description: "Direct-to-S3 profile management with async thumbnail generation.",
   icons: {
     icon: [
