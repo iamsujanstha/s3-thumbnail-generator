@@ -119,16 +119,16 @@ app/api/img/[...key]/route.ts → modules/storage/storage.service.ts → S3
 
 ## Architecture Decisions
 
-| Decision | Reason |
-|---|---|
-| NestJS-style modules in `src/modules/` | Controller → Service → Repository separation without a full framework |
-| Route files are 1–3 lines | All logic lives in the module layer; routes are just adapters |
-| Image proxy at `/api/img/` | Stable same-origin URLs → browser HTTP cache works; no CORS errors; presigned URLs stay server-side |
-| `staleTime: 0` on page 1 | Ensures the list always refetches after creating a profile |
-| `memo()` + context for table rows | Overlay state changes (open modal) never cause image re-renders |
-| Plain `<img>` replaced with `next/image` | Automatic WebP/AVIF, responsive srcset, blur placeholder |
-| `src/lib/` for infrastructure | Shared by both modules and client hooks without circular deps |
-| `src/shared/` re-exports `src/lib/` | Backward-compatible path aliases — existing imports unchanged |
+| Decision                                 | Reason                                                                                              |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| NestJS-style modules in `src/modules/`   | Controller → Service → Repository separation without a full framework                               |
+| Route files are 1–3 lines                | All logic lives in the module layer; routes are just adapters                                       |
+| Image proxy at `/api/img/`               | Stable same-origin URLs → browser HTTP cache works; no CORS errors; presigned URLs stay server-side |
+| `staleTime: 0` on page 1                 | Ensures the list always refetches after creating a profile                                          |
+| `memo()` + context for table rows        | Overlay state changes (open modal) never cause image re-renders                                     |
+| Plain `<img>` replaced with `next/image` | Automatic WebP/AVIF, responsive srcset, blur placeholder                                            |
+| `src/lib/` for infrastructure            | Shared by both modules and client hooks without circular deps                                       |
+| `src/shared/` re-exports `src/lib/`      | Backward-compatible path aliases — existing imports unchanged                                       |
 
 ---
 
@@ -200,7 +200,12 @@ Allow browser `PUT` uploads from your origins:
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": ["s3:PutObject", "s3:GetObject", "s3:HeadObject", "s3:DeleteObject"],
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:HeadObject",
+        "s3:DeleteObject"
+      ],
       "Resource": "arn:aws:s3:::your-profile-image-bucket/*"
     }
   ]
@@ -225,7 +230,11 @@ Allow browser `PUT` uploads from your origins:
     },
     {
       "Effect": "Allow",
-      "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
       "Resource": "*"
     }
   ]
@@ -247,13 +256,13 @@ zip -r ../thumbnail-generator.zip index.mjs node_modules package.json
 
 **Recommended Lambda settings:**
 
-| Setting | Value |
-|---|---|
-| Runtime | Node.js 22.x |
-| Handler | `index.handler` |
-| Architecture | `x86_64` |
-| Memory | 512 MB |
-| Timeout | 30 sec |
+| Setting      | Value           |
+| ------------ | --------------- |
+| Runtime      | Node.js 22.x    |
+| Handler      | `index.handler` |
+| Architecture | `x86_64`        |
+| Memory       | 512 MB          |
+| Timeout      | 30 sec          |
 
 Deploy via CLI:
 
@@ -276,12 +285,12 @@ Stored document shape:
 
 ```ts
 {
-  fullName:  string
-  jobTitle:  string
-  company:   string
-  imageKey:  string   // e.g. "uploads/raw/{uuid}-avatar.png"
-  createdAt: Date
-  updatedAt: Date
+  fullName: string;
+  jobTitle: string;
+  company: string;
+  imageKey: string; // e.g. "uploads/raw/{uuid}-avatar.png"
+  createdAt: Date;
+  updatedAt: Date;
 }
 ```
 

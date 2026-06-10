@@ -6,3 +6,7 @@ coverage
 *.log
 tsconfig.tsbuildinfo
 .env
+.gitnexus/*
+.claude/*
+AGENTS.md
+CLAUDE.md
