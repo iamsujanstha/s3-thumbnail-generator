@@ -162,7 +162,8 @@ Paste this exactly:
       "Authorization",
       "x-amz-date",
       "x-amz-content-sha256",
-      "x-amz-security-token"
+      "x-amz-security-token",
+      "x-amz-tagging"
     ],
     "AllowedMethods": ["PUT", "GET", "HEAD"],
     "AllowedOrigins": [
@@ -610,6 +611,35 @@ Expected result:
 **Path:** `Lambda → thumbnail-generator → Monitor → View CloudWatch logs → latest log stream`
 
 Every run logs either `Thumbnail created: ...` or an error with full stack trace.
+
+---
+
+## Step 13 — Configure S3 Lifecycle Rule (Orphaned Uploads Cleanup)
+
+To automatically clean up files uploaded to S3 but never saved to MongoDB (e.g., if a user aborts profile creation):
+
+**Path:** `AWS Console → S3 → your-app-assets → Management → Lifecycle rules → Create lifecycle rule`
+
+### 13.1 Rule configuration
+
+| Field | Value |
+|---|---|
+| Lifecycle rule name | `DeleteOrphanedRawUploads` |
+| Choose a rule scope | ✅ Limit the scope of this rule using one or more filters |
+| Prefix | `uploads/raw/` |
+| Object tags | Add tag → Key: `cleanup`, Value: `true` |
+
+### 13.2 Lifecycle rule actions
+
+- ✅ **Expire current versions of objects** (deletes the objects after a set number of days)
+
+### 13.3 Transition and expiration settings
+
+| Field | Value |
+|---|---|
+| Days after object creation | `1` (objects are marked for deletion 24 hours after upload) |
+
+→ **Create rule**
 
 ---
 

@@ -1,4 +1,5 @@
 import {
+  DeleteObjectTaggingCommand,
   GetObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
@@ -32,6 +33,7 @@ export const StorageService = {
         Bucket:      getEnv().S3_BUCKET_NAME,
         Key:         input.key,
         ContentType: input.contentType,
+        Tagging:     "cleanup=true",
       }),
       { expiresIn: 60 * 5 }
     );
@@ -61,6 +63,15 @@ export const StorageService = {
           status === 404) return false;
       throw err;
     }
+  },
+
+  async removeCleanupTag(key: string): Promise<void> {
+    await getClient().send(
+      new DeleteObjectTaggingCommand({
+        Bucket: getEnv().S3_BUCKET_NAME,
+        Key:    key,
+      })
+    );
   },
 
   async streamFromS3(key: string, ifNoneMatch?: string | null) {

@@ -105,7 +105,10 @@ export function useProfileUpload() {
       setStep("uploading");
       const uploadRes = await fetch(uploadUrl, {
         method:  "PUT",
-        headers: { "Content-Type": file.type },
+        headers: {
+          "Content-Type": file.type,
+          "x-amz-tagging": "cleanup=true",
+        },
         body:    file,
       });
       if (!uploadRes.ok) {

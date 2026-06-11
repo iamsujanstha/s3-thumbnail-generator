@@ -57,7 +57,14 @@ export const ProfilesService = {
 
   // ── Create profile ──────────────────────────────────────────────
   async create(data: CreateProfileDto) {
-    return ProfilesRepository.create(data);
+    const profile = await ProfilesRepository.create(data);
+    
+    // Remove the cleanup tag so S3 lifecycle rule does not delete the original image
+    StorageService.removeCleanupTag(data.imageKey).catch((err) => {
+      console.warn(`[ProfilesService.create] Failed to remove S3 cleanup tag for key ${data.imageKey}:`, err);
+    });
+
+    return profile;
   },
 
   // ── Update profile ──────────────────────────────────────────────

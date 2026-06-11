@@ -365,11 +365,11 @@ By default, browsers reject `PUT` requests to S3 due to CORS. You must add the f
 ```
 
 > [!WARNING]
-> Ensure the S3 `AllowedHeaders` matches the headers you send in your browser's fetch call. If you pass custom headers during the upload (such as `x-amz-meta-*`), those custom headers must be explicitly added to `AllowedHeaders` or the pre-flight request will fail.
+> Ensure the S3 `AllowedHeaders` matches the headers you send in your browser's fetch call. If you pass tagging or metadata headers during the upload (such as `x-amz-tagging` or `x-amz-meta-*`), those headers must be explicitly added to `AllowedHeaders` or the pre-flight request will fail.
 
 ### 2. IAM Policy (Security Principle of Least Privilege)
 
-The Next.js server credentials (`AWS_ACCESS_KEY_ID`) do not need full administrative permissions. Create an IAM policy with only the minimum required permissions:
+The Next.js server credentials (`AWS_ACCESS_KEY_ID`) do not need full administrative permissions. Create an IAM policy with only the minimum required permissions (including tag removal):
 
 ```json
 {
@@ -378,7 +378,12 @@ The Next.js server credentials (`AWS_ACCESS_KEY_ID`) do not need full administra
     {
       "Sid": "S3PresignedUploadPermissions",
       "Effect": "Allow",
-      "Action": ["s3:PutObject", "s3:GetObject", "s3:HeadObject"],
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:HeadObject",
+        "s3:DeleteObjectTagging"
+      ],
       "Resource": "arn:aws:s3:::YOUR_BUCKET_NAME/uploads/*"
     }
   ]
@@ -393,7 +398,7 @@ The Next.js server credentials (`AWS_ACCESS_KEY_ID`) do not need full administra
 | :--------------------------- | :------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Large Files (>100MB)**     | **S3 Multipart Uploads**        | Prevents connection drops from ruining the upload. The client requests multiple presigned URLs for different chunks, uploads them concurrently, and S3 stitches them together.                                                                     |
 | **Global Distribution**      | **CloudFront CDN Integrations** | Serving raw assets directly from S3 can be slow and expensive. Pointing a CloudFront Distribution at the `/uploads/thumbnails/` path caches images at edge nodes, reducing latency and S3 egress costs.                                            |
-| **Orphaned Uploads Cleanup** | **S3 Lifecycle Rules**          | Users may request a presigned URL, upload an image to S3, but abort/never save the profile in MongoDB. Configure an S3 Lifecycle Rule to automatically delete objects in `uploads/raw/` after 24 hours if they are not referenced in the database. |
+| **Orphaned Uploads Cleanup** | **S3 Lifecycle Rules**          | Tag new S3 uploads with `cleanup=true`. When the profile is successfully saved, remove the tag. Configure an S3 Lifecycle Rule to automatically delete objects in `uploads/raw/` with the tag `cleanup=true` after 24 hours. |
 | **Payload Integrity**        | **Content-MD5 validation**      | To guarantee S3 receives exactly what the browser sent, compute an MD5 hash of the file client-side, sign it into the URL, and force S3 to verify the upload hash matching S3's `ETag`.                                                            |
 
 ---
