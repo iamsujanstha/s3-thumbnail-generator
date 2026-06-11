@@ -7,6 +7,8 @@ import type {
   UpdateProfileDto,
   PresignUploadDto,
   ListQueryDto,
+  InitiateMultipartDto,
+  CompleteMultipartDto,
 } from "@/modules/profiles/profiles.schema";
 import type { ProfileListItemDto, ProfileDetailDto } from "@/types/dtos";
 
@@ -85,5 +87,44 @@ export const ProfilesService = {
       contentType: data.contentType,
     });
     return { uploadUrl, imageKey };
+  },
+
+  // ── Initiate Multipart Upload ───────────────────────────────────
+  async initiateMultipart(data: InitiateMultipartDto) {
+    const imageKey = `uploads/raw/${randomUUID()}-${sanitizeFilename(data.filename)}`;
+    const uploadId = await StorageService.initiateMultipartUpload(imageKey, data.contentType);
+    
+    // Chunk size: 5MB minimum
+    const chunkSize = 5 * 1024 * 1024;
+    const numParts  = Math.ceil(data.size / chunkSize);
+    
+    const partPromises = Array.from({ length: numParts }, (_, i) => {
+      const partNumber = i + 1;
+      return StorageService.createUploadPartUrl({
+        key:        imageKey,
+        uploadId,
+        partNumber,
+      }).then((uploadUrl) => ({
+        partNumber,
+        uploadUrl,
+      }));
+    });
+
+    const parts = await Promise.all(partPromises);
+
+    return {
+      uploadId,
+      key: imageKey,
+      parts,
+    };
+  },
+
+  // ── Complete Multipart Upload ───────────────────────────────────
+  async completeMultipart(data: CompleteMultipartDto) {
+    await StorageService.completeMultipartUpload({
+      key:      data.key,
+      uploadId: data.uploadId,
+      parts:    data.parts,
+    });
   },
 };

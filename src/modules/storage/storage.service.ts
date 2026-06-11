@@ -1,9 +1,13 @@
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectTaggingCommand,
   GetObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
   S3Client,
+  UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getEnv } from "@/lib/env";
@@ -70,6 +74,61 @@ export const StorageService = {
       new DeleteObjectTaggingCommand({
         Bucket: getEnv().S3_BUCKET_NAME,
         Key:    key,
+      })
+    );
+  },
+
+  async initiateMultipartUpload(key: string, contentType: string): Promise<string> {
+    const res = await getClient().send(
+      new CreateMultipartUploadCommand({
+        Bucket:      getEnv().S3_BUCKET_NAME,
+        Key:         key,
+        ContentType: contentType,
+        Tagging:     "cleanup=true",
+      })
+    );
+    if (!res.UploadId) throw new Error("Failed to initiate S3 multipart upload.");
+    return res.UploadId;
+  },
+
+  async createUploadPartUrl(input: {
+    key: string;
+    uploadId: string;
+    partNumber: number;
+  }): Promise<string> {
+    return getSignedUrl(
+      getClient(),
+      new UploadPartCommand({
+        Bucket:     getEnv().S3_BUCKET_NAME,
+        Key:        input.key,
+        UploadId:   input.uploadId,
+        PartNumber: input.partNumber,
+      }),
+      { expiresIn: 60 * 20 }
+    );
+  },
+
+  async completeMultipartUpload(input: {
+    key: string;
+    uploadId: string;
+    parts: { PartNumber: number; ETag: string }[];
+  }): Promise<void> {
+    await getClient().send(
+      new CompleteMultipartUploadCommand({
+        Bucket:          getEnv().S3_BUCKET_NAME,
+        Key:             input.key,
+        UploadId:        input.uploadId,
+        MultipartUpload: { Parts: input.parts },
+      })
+    );
+  },
+
+  async abortMultipartUpload(input: { key: string; uploadId: string }): Promise<void> {
+    await getClient().send(
+      new AbortMultipartUploadCommand({
+        Bucket:   getEnv().S3_BUCKET_NAME,
+        Key:      input.key,
+        UploadId: input.uploadId,
       })
     );
   },

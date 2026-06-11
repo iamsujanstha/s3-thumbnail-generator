@@ -11,6 +11,8 @@ import {
   updateProfileSchema,
   presignUploadSchema,
   listQuerySchema,
+  initiateMultipartSchema,
+  completeMultipartSchema,
 } from "@/modules/profiles/profiles.schema";
 
 // ── Response helpers ────────────────────────────────────────────
@@ -108,5 +110,33 @@ export async function presignUpload(req: Request) {
       return NextResponse.json({ error: "Upload failed.", detail: msg }, { status: 500 });
     }
     return fail("Unable to prepare upload.", 500);
+  }
+}
+
+export async function initiateMultipartUpload(req: Request) {
+  try {
+    const parsed = initiateMultipartSchema.safeParse(await req.json());
+    if (!parsed.success) return validationFail(parsed.error);
+
+    const result = await ProfilesService.initiateMultipart(parsed.data);
+    return ok(result, 201);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[initiateMultipartUpload]", msg);
+    return fail("Unable to initiate multipart upload.", 500);
+  }
+}
+
+export async function completeMultipartUpload(req: Request) {
+  try {
+    const parsed = completeMultipartSchema.safeParse(await req.json());
+    if (!parsed.success) return validationFail(parsed.error);
+
+    await ProfilesService.completeMultipart(parsed.data);
+    return ok({ success: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[completeMultipartUpload]", msg);
+    return fail("Unable to complete multipart upload.", 500);
   }
 }

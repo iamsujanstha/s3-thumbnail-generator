@@ -392,6 +392,92 @@ The Next.js server credentials (`AWS_ACCESS_KEY_ID`) do not need full administra
 
 ---
 
+## <span style="color:#a855f7; background-color:#f3e8ff; padding: 4px 8px; border-radius: 4px; display: inline-block;">5b. Unified S3 Upload Flow (Standard vs Multipart)</span>
+
+To handle files of all sizes optimally, the application implements a unified direct-to-S3 upload mechanism. It dynamically selects between a **Standard Single Upload** and an **S3 Multipart Upload** based on the file size.
+
+### Internal Upload Flow Diagram
+
+```mermaid
+flowchart TD
+    A([User Selects File & Clicks Submit]) --> B{File Size > 5MB?}
+
+    %% Path A: Small Files
+    B -->|No: Small File| C[Standard Single Upload]
+    C --> D[POST /api/s3/presign]
+    D --> E[GET PutObject Presigned URL]
+    E --> F[PUT File body with cleanup=true tag]
+    F --> G[POST /api/profiles]
+
+    %% Path B: Large Files
+    B -->|Yes: Large File| H[Multipart Chunked Upload]
+    H --> I[POST /api/s3/multipart/init]
+    I --> J[S3: CreateMultipartUpload]
+    J --> K[Generate Presigned URLs for all 5MB chunks]
+    K --> L[PUT chunks concurrently concurrency limit: 3]
+    L --> M[POST /api/s3/multipart/complete]
+    M --> N[S3: CompleteMultipartUpload]
+    N --> G
+
+    %% Finalize & Cleanup
+    G --> O[DB: Save Profile Document]
+    O --> P[S3: DeleteObjectTagging removes cleanup tag]
+    P --> Q([Upload Complete & Saved])
+```
+
+### Flow Comparison
+
+| Feature | ⚡ Standard Upload (≤ 5MB) | 🚀 Multipart Upload (> 5MB) |
+| :--- | :--- | :--- |
+| **Use Case** | Quick avatar uploads and small images. | Large high-res profiles, videos, or raw assets up to 200MB. |
+| **API Endpoints** | `POST /api/s3/presign` | `POST /api/s3/multipart/init`<br>`POST /api/s3/multipart/complete` |
+| **Concurrency** | 1 sequential request. | Up to 3 parallel chunk uploads (5MB slices) to maximize bandwidth. |
+| **Fail Safety** | Connection drops abort the entire upload. | Slices are uploaded independently; retries apply at the chunk level. |
+| **Orphaned Cleanup** | Object is tagged with `cleanup=true` at signing. | Upload is initiated with the `cleanup=true` object tag. |
+
+### Code Snippet Reference
+
+#### Client-side Selection (`src/shared/useProfileUpload.ts`)
+```typescript
+const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
+const useMultipart = file.size > CHUNK_SIZE;
+
+if (useMultipart) {
+  // 1. Initiate Multipart
+  const initRes = await fetch("/api/s3/multipart/init", { ... });
+  const { uploadId, key, parts } = await initRes.json();
+
+  // 2. Upload chunks in parallel (concurrency limit: 3)
+  const completedParts = await uploadChunksConcurrently(file, parts, CHUNK_SIZE);
+
+  // 3. Finalize on S3
+  await fetch("/api/s3/multipart/complete", {
+    body: JSON.stringify({ uploadId, key, parts: completedParts })
+  });
+} else {
+  // Standard upload
+  const presignRes = await fetch("/api/s3/presign", { ... });
+  const { uploadUrl, imageKey } = await presignRes.json();
+  await fetch(uploadUrl, { method: "PUT", body: file, headers: { "x-amz-tagging": "cleanup=true" } });
+}
+```
+
+#### Server-side Tag Cleanup on Profile Save (`src/modules/profiles/profiles.service.ts`)
+```typescript
+async create(data: CreateProfileDto) {
+  const profile = await ProfilesRepository.create(data);
+  
+  // Remove the cleanup tag so S3 lifecycle rule does not delete the original image
+  StorageService.removeCleanupTag(data.imageKey).catch((err) => {
+    console.warn(`[ProfilesService.create] Failed to remove S3 cleanup tag:`, err);
+  });
+
+  return profile;
+}
+```
+
+---
+
 ## <span style="color:#16a34a; background-color:#dcfce7; padding: 4px 8px; border-radius: 4px; display: inline-block;">6. Advanced Optimizations & Alternative Designs</span>
 
 | Feature / Scenario           | Approach                        | Why & Best Practice                                                                                                                                                                                                                                |

@@ -16,7 +16,7 @@ export type ProfileFormState = {
   company:  string;
 };
 
-const MAX_FILE_SIZE = 5 * 1024 * 1024;
+const MAX_FILE_SIZE = 200 * 1024 * 1024;
 const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 export const STEP_LABELS: Record<UploadStep, string> = {
@@ -83,41 +83,129 @@ export function useProfileUpload() {
     }
 
     try {
-      /* 1 — Presign */
-      setStep("presigning");
-      const presignRes = await fetch("/api/s3/presign", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename:    file.name,
-          contentType: file.type,
-          size:        file.size,
-        }),
-      });
-      if (!presignRes.ok)
-        throw new Error("Could not prepare the upload. Try again.");
-      const { uploadUrl, imageKey } = (await presignRes.json()) as {
-        uploadUrl: string;
-        imageKey:  string;
-      };
+      let imageKey: string;
+      const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
+      const useMultipart = file.size > CHUNK_SIZE;
 
-      /* 2 — Upload to S3 */
-      setStep("uploading");
-      const uploadRes = await fetch(uploadUrl, {
-        method:  "PUT",
-        headers: {
-          "Content-Type": file.type,
-          "x-amz-tagging": "cleanup=true",
-        },
-        body:    file,
-      });
-      if (!uploadRes.ok) {
-        const s3Err = await uploadRes.text().catch(() => "");
-        throw new Error(
-          `Image upload failed (${uploadRes.status})${
-            s3Err ? `: ${s3Err.slice(0, 200)}` : "."
-          }`
-        );
+      if (useMultipart) {
+        /* 1 — Initiate Multipart Upload */
+        setStep("presigning");
+        const initRes = await fetch("/api/s3/multipart/init", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filename:    file.name,
+            contentType: file.type,
+            size:        file.size,
+          }),
+        });
+        if (!initRes.ok)
+          throw new Error("Could not prepare the multipart upload. Try again.");
+        
+        const { uploadId, key, parts } = (await initRes.json()) as {
+          uploadId: string;
+          key:      string;
+          parts:    { partNumber: number; uploadUrl: string }[];
+        };
+        imageKey = key;
+
+        /* 2 — Upload chunks concurrently */
+        setStep("uploading");
+        
+        // Limit concurrency to 3 parallel chunk uploads
+        const uploadQueue = [...parts];
+        const completedParts: { PartNumber: number; ETag: string }[] = [];
+        const concurrencyLimit = 3;
+
+        const uploadWorker = async () => {
+          while (uploadQueue.length > 0) {
+            const part = uploadQueue.shift();
+            if (!part) break;
+
+            const start = (part.partNumber - 1) * CHUNK_SIZE;
+            const end = Math.min(start + CHUNK_SIZE, file.size);
+            const chunk = file.slice(start, end);
+
+            const uploadRes = await fetch(part.uploadUrl, {
+              method: "PUT",
+              body:   chunk,
+            });
+
+            if (!uploadRes.ok) {
+              throw new Error(`Upload of part ${part.partNumber} failed.`);
+            }
+
+            const etag = uploadRes.headers.get("ETag");
+            if (!etag) {
+              throw new Error(`Missing ETag header for part ${part.partNumber}.`);
+            }
+
+            completedParts.push({
+              PartNumber: part.partNumber,
+              ETag:       etag.replace(/"/g, ""), // strip surrounding quotes if present
+            });
+          }
+        };
+
+        // Spawn workers
+        const workers = Array.from({ length: concurrencyLimit }, () => uploadWorker());
+        await Promise.all(workers);
+
+        // Sort parts by part number
+        completedParts.sort((a, b) => a.PartNumber - b.PartNumber);
+
+        /* 3 — Complete Multipart Upload */
+        setStep("saving");
+        const completeRes = await fetch("/api/s3/multipart/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            uploadId,
+            key:  imageKey,
+            parts: completedParts,
+          }),
+        });
+        if (!completeRes.ok) {
+          throw new Error("Could not finalize S3 multipart upload.");
+        }
+      } else {
+        /* 1 — Presign (Standard PUT) */
+        setStep("presigning");
+        const presignRes = await fetch("/api/s3/presign", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filename:    file.name,
+            contentType: file.type,
+            size:        file.size,
+          }),
+        });
+        if (!presignRes.ok)
+          throw new Error("Could not prepare the upload. Try again.");
+        const { uploadUrl, imageKey: key } = (await presignRes.json()) as {
+          uploadUrl: string;
+          imageKey:  string;
+        };
+        imageKey = key;
+
+        /* 2 — Upload to S3 (Standard PUT) */
+        setStep("uploading");
+        const uploadRes = await fetch(uploadUrl, {
+          method:  "PUT",
+          headers: {
+            "Content-Type": file.type,
+            "x-amz-tagging": "cleanup=true",
+          },
+          body:    file,
+        });
+        if (!uploadRes.ok) {
+          const s3Err = await uploadRes.text().catch(() => "");
+          throw new Error(
+            `Image upload failed (${uploadRes.status})${
+              s3Err ? `: ${s3Err.slice(0, 200)}` : "."
+            }`
+          );
+        }
       }
 
       /* 3 — Save profile */
