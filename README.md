@@ -359,7 +359,7 @@ aws lambda update-function-code \
   --region ap-south-1
 ```
 
-**S3 trigger:** prefix `uploads/raw/`, event type `s3:ObjectCreated:Put`.
+**S3 trigger:** prefix `uploads/raw/`, event type `s3:ObjectCreated:*` (or both `s3:ObjectCreated:Put` and `s3:ObjectCreated:CompleteMultipartUpload`).
 
 ---
 

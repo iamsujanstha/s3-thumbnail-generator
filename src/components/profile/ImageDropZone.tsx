@@ -140,7 +140,7 @@ function Placeholder({
           {isDragging ? "Drop to upload" : "Drop an image here"}
         </p>
         <p id={hintId} className="mt-1 text-sm text-slate-500">
-          JPG, PNG, or WebP — up to 5 MB
+          JPG, PNG, or WebP — up to 200 MB (Multipart chunked above 5MB)
         </p>
       </div>
       <p className="text-xs text-blue-600 underline underline-offset-2">

@@ -41,6 +41,7 @@ export function useProfileUpload() {
   const [step, setStep]             = useState<UploadStep>("idle");
   const [error, setError]           = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ uploaded: number; total: number; percent: number } | null>(null);
 
   const previewUrl = useMemo(
     () => (file ? URL.createObjectURL(file) : null),
@@ -84,6 +85,7 @@ export function useProfileUpload() {
     }
 
     try {
+      setUploadProgress(null);
       let imageKey: string;
       const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
       const useMultipart = file.size > CHUNK_SIZE;
@@ -109,6 +111,9 @@ export function useProfileUpload() {
           parts:    { partNumber: number; uploadUrl: string }[];
         };
         imageKey = key;
+
+        // Initialize progress for multipart upload
+        setUploadProgress({ uploaded: 0, total: parts.length, percent: 0 });
 
         /* 2 — Upload chunks concurrently */
         setStep("uploading");
@@ -144,6 +149,14 @@ export function useProfileUpload() {
             completedParts.push({
               PartNumber: part.partNumber,
               ETag:       etag.replace(/"/g, ""), // strip surrounding quotes if present
+            });
+
+            // Update progress after chunk completion
+            const currentUploaded = completedParts.length;
+            setUploadProgress({
+              uploaded: currentUploaded,
+              total:    parts.length,
+              percent:  Math.round((currentUploaded / parts.length) * 100),
             });
           }
         };
@@ -201,7 +214,6 @@ export function useProfileUpload() {
           method:  "PUT",
           headers: {
             "Content-Type":  file.type,
-            "x-amz-tagging": "cleanup=true",
             "Content-MD5":   contentMd5,
           },
           body:    file,
@@ -233,9 +245,11 @@ export function useProfileUpload() {
       setStep("complete");
       setForm({ fullName: "", jobTitle: "", company: "" });
       clearFile();
+      setUploadProgress(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
       setStep("idle");
+      setUploadProgress(null);
     }
   }
 
@@ -246,5 +260,6 @@ export function useProfileUpload() {
     step, isBusy, error,
     selectFile, clearFile, handleSubmit,
     setIsDragging,
+    uploadProgress,
   };
 }

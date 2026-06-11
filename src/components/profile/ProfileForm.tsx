@@ -52,6 +52,7 @@ export function ProfileForm() {
     step, isBusy, error,
     selectFile, clearFile, handleSubmit,
     setIsDragging,
+    uploadProgress,
   } = useProfileUpload();
 
   /* Revoke object URL on unmount / file change */
@@ -101,6 +102,11 @@ export function ProfileForm() {
                 className="mt-1 text-sm text-slate-500"
               >
                 {STEP_LABELS[step]}
+                {uploadProgress && (
+                  <span className="font-semibold text-blue-600 block sm:inline sm:ml-2">
+                    {uploadProgress.percent}% ({uploadProgress.uploaded} of {uploadProgress.total} chunks)
+                  </span>
+                )}
               </p>
             </div>
             {step === "complete" && (

@@ -40,7 +40,10 @@ export const StorageService = {
         Tagging:     "cleanup=true",
         ContentMD5:  input.contentMd5,
       }),
-      { expiresIn: 60 * 5 }
+      {
+        expiresIn: 60 * 5,
+        signableHeaders: new Set(["content-type", "content-md5"]),
+      }
     );
   },
 

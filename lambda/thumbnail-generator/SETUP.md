@@ -463,7 +463,7 @@ Then reference it in `index.mjs` as `process.env.BUCKET_NAME`.
 |---|---|
 | Source | `S3` |
 | Bucket | `your-app-assets` |
-| Event types | `PUT` ← under "Object creation events" |
+| Event types | `PUT` and `Multipart upload completed` (or check `All object create events`) |
 | Prefix | `uploads/raw/` |
 | Suffix | *(leave empty)* |
 
@@ -526,7 +526,7 @@ You should see one entry:
 
 | Name | Events | Prefix | Destination |
 |---|---|---|---|
-| (auto-generated) | s3:ObjectCreated:Put | uploads/raw/ | Lambda: thumbnail-generator |
+| (auto-generated) | s3:ObjectCreated:Put, s3:ObjectCreated:CompleteMultipartUpload | uploads/raw/ | Lambda: thumbnail-generator |
 
 If it's not there, add it manually:
 
@@ -536,7 +536,7 @@ If it's not there, add it manually:
 |---|---|
 | Event name | `TriggerThumbnailLambda` |
 | Prefix | `uploads/raw/` |
-| Event types | ✅ `s3:ObjectCreated:Put` |
+| Event types | ✅ `s3:ObjectCreated:Put` and ✅ `s3:ObjectCreated:CompleteMultipartUpload` |
 | Destination | Lambda function |
 | Lambda function | `thumbnail-generator` |
 
