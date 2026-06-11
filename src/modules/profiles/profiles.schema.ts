@@ -19,6 +19,7 @@ export const presignUploadSchema = z.object({
   filename:    z.string().trim().min(1).max(180),
   contentType: z.enum(imageMimeTypes),
   size:        z.number().int().positive().max(200 * 1024 * 1024),
+  contentMd5:  z.string().min(1).optional(),
 });
 
 export const listQuerySchema = z.object({

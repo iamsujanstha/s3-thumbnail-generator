@@ -30,7 +30,7 @@ function getClient(): S3Client {
 }
 
 export const StorageService = {
-  async createPutUrl(input: { key: string; contentType: string }): Promise<string> {
+  async createPutUrl(input: { key: string; contentType: string; contentMd5?: string }): Promise<string> {
     return getSignedUrl(
       getClient(),
       new PutObjectCommand({
@@ -38,6 +38,7 @@ export const StorageService = {
         Key:         input.key,
         ContentType: input.contentType,
         Tagging:     "cleanup=true",
+        ContentMD5:  input.contentMd5,
       }),
       { expiresIn: 60 * 5 }
     );

@@ -2,6 +2,7 @@
 
 import { type FormEvent, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { calculateMD5 } from "@/lib/md5";
 
 export type UploadStep =
   | "idle"
@@ -171,6 +172,11 @@ export function useProfileUpload() {
       } else {
         /* 1 — Presign (Standard PUT) */
         setStep("presigning");
+
+        // Calculate MD5 of file to ensure payload integrity
+        const arrayBuffer = await file.arrayBuffer();
+        const contentMd5 = calculateMD5(arrayBuffer);
+
         const presignRes = await fetch("/api/s3/presign", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -178,6 +184,7 @@ export function useProfileUpload() {
             filename:    file.name,
             contentType: file.type,
             size:        file.size,
+            contentMd5,
           }),
         });
         if (!presignRes.ok)
@@ -193,8 +200,9 @@ export function useProfileUpload() {
         const uploadRes = await fetch(uploadUrl, {
           method:  "PUT",
           headers: {
-            "Content-Type": file.type,
+            "Content-Type":  file.type,
             "x-amz-tagging": "cleanup=true",
+            "Content-MD5":   contentMd5,
           },
           body:    file,
         });

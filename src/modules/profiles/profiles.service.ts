@@ -85,6 +85,7 @@ export const ProfilesService = {
     const uploadUrl = await StorageService.createPutUrl({
       key:         imageKey,
       contentType: data.contentType,
+      contentMd5:  data.contentMd5,
     });
     return { uploadUrl, imageKey };
   },
