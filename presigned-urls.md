@@ -23,15 +23,15 @@ Our architecture implements **Client-Side Direct Uploads via S3 Presigned URLs**
 ```mermaid
 flowchart TD
     subgraph Client ["Client Layer (Frontend)"]
-        Browser["React Client<br/>(Image Dropzone)"]
+        Browser["React / Next.js Client<br/>(Image Dropzone)"]
     end
 
-    subgraph Server ["Server Layer (Next.js)"]
-        API["/api/s3/presign<br/>(API Endpoint)"]
-        Controller["profiles.controller.ts<br/>(Request Routing)"]
-        Service["profiles.service.ts<br/>(Business Logic)"]
-        Storage["storage.service.ts<br/>(S3 Client SDK)"]
-        DB["MongoDB<br/>(Mongoose / Profile Model)"]
+    subgraph Server ["Server Layer (NestJS Backend)"]
+        API["Presign Endpoint<br/>(Generate URLs)"]
+        Controller["Profiles Controller<br/>(Request Routing)"]
+        Service["Profiles Service<br/>(Business Logic)"]
+        Storage["Storage Service<br/>(S3 Client SDK)"]
+        DB["MongoDB / PostgreSql<br/>(Database)"]
     end
 
     subgraph AWS ["Storage & Processing Layer (AWS)"]
@@ -60,27 +60,28 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Client as React Client (Browser)
-    participant Server as Next.js Server API
+    actor Client as React / Next.js Client
+    participant Server as NestJS Backend API
     participant S3 as AWS S3 Bucket
     participant DB as MongoDB Database
     participant Lambda as AWS Lambda (Sharp)
 
     Note over Client, Server: Phase 1: Requesting Authorization
-    Client->>Server: POST /api/s3/presign (filename, contentType)
-    Note over Server: Zod Validation & UUID key generation
-    Server->>S3: Call getSignedUrl(PutObjectCommand)
+    Client->>Server: POST /api/s3/presign (filename, contentType, contentMd5)
+    Note over Server: Zod/Class-Validator Validation & UUID key generation
+    Server->>S3: Call getSignedUrl(PutObjectCommand with tag cleanup=true)
     S3-->>Server: Return cryptographic signature URL
     Server-->>Client: Send { uploadUrl, imageKey }
 
     Note over Client, S3: Phase 2: Direct Uploading
-    Client->>S3: PUT binary stream to uploadUrl (Header: Content-Type)
+    Client->>S3: PUT binary stream to uploadUrl (Header: Content-Type, Content-MD5)
     S3-->>Client: HTTP 200 OK (Upload Success)
 
-    Note over Client, DB: Phase 3: Metadata Persisting
+    Note over Client, DB: Phase 3: Metadata Persisting & Tag Cleanup
     Client->>Server: POST /api/profiles (fullName, jobTitle, company, imageKey)
     Server->>DB: Save Profile Document
     DB-->>Server: Saved Document
+    Server->>S3: removeCleanupTag(imageKey) (Peels off 'cleanup=true')
     Server-->>Client: Return Profile (Success)
 
     Note over S3, Lambda: Phase 4: Asynchronous Processing (S3 Event)
@@ -96,261 +97,732 @@ sequenceDiagram
 
 ## <span style="color:#b45309; background-color:#fffbeb; padding: 4px 8px; border-radius: 4px; display: inline-block;">2. Why & How: System Design Questions</span>
 
-### <span style="color:#d97706">Q1: Why not upload files directly to the Next.js server first?</span>
+### <span style="color:#d97706">Q1: Why not upload files directly to the server first?</span>
 
-1. **Serverless Execution Limits:** Most Next.js projects deploy to serverless environments (like Vercel). Serverless functions have strict execution duration limits (e.g., 10-15s for hobby tiers, up to 60s for pro tiers) and payload size limits (Vercel has a hard limit of **4.5 MB** on API request payloads). Large uploads will crash the serverless route.
-2. **Server Thread Blocking & Memory Bloat:** Handling multipart form data consumes server memory, as the server must buffer file chunks to disk or RAM.
+1. **Serverless Execution Limits:** Most serverless platforms (e.g. Vercel) have payload limits (e.g. Vercel has a hard limit of **4.5 MB** on API request bodies). Large uploads will crash the route.
+2. **Server Thread Blocking & Memory Bloat:** Handling multipart form data consumes server CPU and RAM. Direct uploading offloads this completely.
 3. **Bandwidth Costs:** Paying twice for ingress bandwidth (Client $\rightarrow$ Server $\rightarrow$ S3) is costly. Direct uploading uploads once (Client $\rightarrow$ S3).
 
 ### <span style="color:#d97706">Q2: How does S3 verify the signature without calling our server?</span>
 
-When the server generates the presigned URL, it uses the **AWS Signature Version 4 (SigV4)** protocol. It creates a cryptographic hash containing:
-
+When the server generates the presigned URL, it uses the **AWS Signature Version 4 (SigV4)** protocol. It creates a cryptographic signature containing:
 - The HTTP verb (`PUT`)
 - The target bucket and object key
 - Expiration time of the URL
 - Date of generation
-- Headers that must be present (e.g., `Content-Type`)
+- Headers that must be present (e.g., `Content-Type`, `Content-MD5`)
 
-This data is signed using our private `AWS_SECRET_ACCESS_KEY`. When the client hits the URL, S3 uses its own knowledge of our secret key to recalculate the hash. If the hashes match and the timestamp has not expired, S3 grants write access.
+This data is signed using our private `AWS_SECRET_ACCESS_KEY`. When the client hits the URL, S3 recalculates the hash. If the hashes match and the timestamp has not expired, S3 grants write access.
 
 ### <span style="color:#d97706">Q3: Why use PUT instead of POST for presigned uploads?</span>
 
 - **PUT:** Uploads a raw binary stream. The file is sent directly as the request body. It matches S3's standard `PutObject` API, requires very simple header configuration, and is easier to sign and manage.
-- **POST:** Requires multipart form-data uploads (`POST` presigning is actually called **S3 Presigned Post**). While it allows enforcing maximum file size limits directly in the policy, it requires building complex HTML forms with specific input fields matching the policy keys.
+- **POST:** Requires multipart form-data uploads (S3 Presigned Post). While it allows enforcing maximum file size limits directly in the policy, it requires building complex HTML forms with specific input fields matching the policy keys.
 
 ### <span style="color:#d97706">Q4: How do we prevent users from modifying files after uploading?</span>
-
-The profile image is never referenceable by the user's local name directly.
 
 - We generate a secure `UUID` on the server: `uploads/raw/<uuid>-<sanitized_filename>`.
 - The client cannot inject arbitrary S3 keys because S3 rejects the upload if the path does not exactly match the key signed in the URL.
 
----
+### <span style="color:#d97706">Q5: What is the "Auto-Delete / Tag Cleanup" pattern, and why do we need it?</span>
 
-## <span style="color:#4f46e5; background-color:#e0e7ff; padding: 4px 8px; border-radius: 4px; display: inline-block;">3. Folder Architecture & Layout</span>
+**The Problem: Orphaned Uploads**
+If a user selects an image, the client requests a presigned URL, and S3 successfully receives the file. However, if the user closes their browser tab or cancels before clicking "Submit", the database profile is never created. The image file remains orphaned in S3 forever, costing money.
 
-To make this implementation completely portable, we structure the backend into decoupled domain directories:
-
-```
-src/
-├── app/
-│   └── api/
-│       ├── s3/
-│       │   └── presign/
-│       │       └── route.ts         # Router endpoint (Next.js App Router)
-│       └── profiles/
-│           └── route.ts             # Metadata storage endpoint
-├── modules/
-│   ├── storage/
-│   │   └── storage.service.ts       # Low-level AWS SDK wrapper (reusable)
-│   └── profiles/
-│       ├── profiles.controller.ts   # Next.js API Request/Response parser
-│       ├── profiles.service.ts      # App business logic (links storage + repo)
-│       ├── profiles.repository.ts   # Database CRUD operations
-│       └── profiles.schema.ts       # Zod schemas for input validation
-├── shared/
-│   ├── env.ts                       # Environment variable parser
-│   └── useProfileUpload.ts          # Frontend Custom React Hook
-lambda/
-└── thumbnail-generator/
-    ├── index.mjs                    # Asynchronous image optimization Lambda
-    └── SETUP.md                     # Lambda deploy instructions
+**The Solution:**
+```mermaid
+stateDiagram-v2
+    [*] --> UploadRequested : Client calls /s3/presign
+    UploadRequested --> S3Uploaded : Client PUTs file with tag cleanup=true
+    
+    state S3Uploaded {
+        [*] --> WaitingForDatabase
+    }
+    
+    WaitingForDatabase --> ProfileSaved : Client POSTs /api/profiles
+    ProfileSaved --> TagRemoved : Backend calls removeCleanupTag()
+    TagRemoved --> SafeStorage : File is kept permanently (No cleanup)
+    
+    WaitingForDatabase --> Abandoned : User closes tab / form is not submitted
+    Abandoned --> LifecycleTriggered : 24 hours pass
+    LifecycleTriggered --> Deleted : S3 Lifecycle Rule deletes object automatically
+    Deleted --> [*]
 ```
 
+1. **Tag During Signing:** S3 pre-signed URLs are created with a tag `cleanup=true` attached.
+2. **Peel Off Tag on Success:** When the profile is successfully saved to the database, the backend calls `DeleteObjectTaggingCommand` to remove the `cleanup=true` tag from the S3 object.
+3. **Automatic Cleanup:** An S3 Lifecycle Rule is configured on the bucket to automatically delete any object in `uploads/raw/` that still carries the `cleanup=true` tag after 24 hours.
+
+### <span style="color:#d97706">Q6: What are the alternatives to calculating MD5 client-side?</span>
+
+Ensuring payload integrity prevents half-uploaded or corrupted files from being saved. Standard `Content-MD5` header checks require calculating the MD5 hash in the client.
+
+**Alternatives:**
+1. **SHA-256 Checksums (Web Crypto API):**
+   - The browser calculates a SHA-256 checksum natively using the Web Crypto API: `await crypto.subtle.digest("SHA-256", fileBuffer)`.
+   - Web Crypto is natively supported by modern browsers, avoiding custom, bug-prone JS hashing functions.
+   - S3 supports signing the `x-amz-checksum-sha256` header instead of `Content-MD5`.
+2. **Using a Pre-Compiled Client-Side Library:**
+   - Instead of writing custom bit-shifting algorithms for MD5, use battle-tested libraries like `spark-md5` or `js-md5`. 
+   - `spark-md5` supports **incremental hashing** which allows hashing large files block-by-block without loading the entire file into memory.
+3. **TLS/TCP Layer Checks (No custom checksum header):**
+   - You can completely skip signing a checksum header. S3 will still perform integrity checks at the transport layer (SSL/TLS). However, this does not protect against client-side browser corruption before packet transmission.
+
 ---
 
-## <span style="color:#c026d3; background-color:#fae8ff; padding: 4px 8px; border-radius: 4px; display: inline-block;">4. Code File Connection: Start-to-Finish</span>
+## <span style="color:#0284c7; background-color:#e0f2fe; padding: 4px 8px; border-radius: 4px; display: inline-block;">3. Architectural Analysis: CDN vs. S3 Direct vs. Server Proxy</span>
 
-Here is the exact code trace of the upload process.
+When building a system that serves assets stored in S3, choosing the right delivery channel directly affects **performance, security, hosting costs, and server load**.
 
-### Step 1: The Request for Auth (Client)
+Below, we detail the three primary architectural strategies, why a **React SPA** strictly requires a CDN compared to **Next.js**, and the security/billing vulnerabilities of S3 direct URLs.
 
-The frontend triggers the file upload hook when a user submits a profile creation form.
+---
+
+### Delivery Architecture Comparison
+
+```mermaid
+flowchart TD
+    %% Path A: S3 Direct (Vulnerable)
+    subgraph PathA ["Path A: S3 Direct (Vulnerable)"]
+        ClientA([React Client]) -->|"1. GET /img.jpg?Sig=xyz"| S3Direct[("AWS S3 Bucket (Private)")]
+        S3Direct -->|"2. Egress raw file (No Cache)"| ClientA
+    end
+
+    %% Path B: Server-Side Stream Proxy (High CPU/Memory Load)
+    subgraph PathB ["Path B: Server Stream Proxy"]
+        ClientB([React Client]) -->|"1. GET /api/img/photo.jpg"| ServerB["Backend Server (NestJS / Node)"]
+        ServerB -->|"2. Fetch binary"| S3PrivateB[("AWS S3 Bucket (Private)")]
+        S3PrivateB -->|"3. Stream bytes"| ServerB
+        ServerB -->|"4. Stream to Client (Consumes Node RAM)"| ClientB
+    end
+
+    %% Path C: CDN Caching (Optimal & Secure)
+    subgraph PathC ["Path C: CDN Edge Caching"]
+        ClientC([React Client]) -->|"1. GET images.domain.com/photo.jpg"| CDN["CDN Edge Cache (CloudFront / Cloudflare)"]
+        CDN -->|"2. Cache Hit (Instantly served)"| ClientC
+        CDN -.->|"3. Cache Miss (Only once)"| S3PrivateC[("AWS S3 Bucket (Private)")]
+        S3PrivateC -.->|"4. Cache it & serve"| CDN
+    end
+```
+
+---
+
+### side-by-side Architectural Comparison
+
+| Dimension | 🌐 Path A: Direct AWS S3 URLs | ⚡ Path B: Server-Side Stream Proxy | 🚀 Path C: CDN (CloudFront / Cloudflare) |
+| :--- | :--- | :--- | :--- |
+| **S3 Access Control** | Must sign temporary GET URLs or make S3 public. | 100% Private. Backend accesses S3 securely via IAM roles. | 100% Private. CDN accesses S3 securely via **OAC (Origin Access Control)**. |
+| **Browser Caching** | **Zero Caching.** Rotating signature parameters (`?Signature=...`) bypass browser cache. | **Good.** Server can send static headers (`Cache-Control: public, immutable`). | **Optimal.** Edge nodes cache assets globally, serving them in microseconds. |
+| **Server Load** | Zero backend server load. | **High CPU & RAM.** Server buffers and streams binary files (Node.js thread blocks). | Zero backend server load. |
+| **Egress Bandwidth Costs** | **Extremely High.** AWS S3 egress charges are expensive ($0.09/GB). | Medium (Server hosting traffic bandwidth rates apply). | **Low.** CDN bandwidth is much cheaper (often with a generous free tier). |
+| **Security (DoW Protection)** | **Vulnerable to Denial of Wallet.** Anyone can scrape/flood your bucket. | Good. Handled via application rate-limiters. | **Optimal.** CDN handles DDoS protection at the network edge (AWS Shield / WAF). |
+| **Domain Customization** | No custom domains (must use `s3.amazonaws.com`). | Fully integrated with your own domain name. | Fully supports custom domains (`images.yourcompany.com`). |
+
+---
+
+### Deep Dive: React SPA vs. Next.js (Why the difference?)
+
+#### Why React SPA (Client-only) strictly requires a CDN:
+A React SPA is static client-side code running in the browser. Since there is no server-side Node.js executor, the React client cannot directly authenticate with S3 without exposing credentials.
+* **The Presigned URL Flood:** If your React application does not use a CDN and your S3 bucket is private, your backend must generate a presigned GET URL for every single image layout. If a user loads a directory containing 100 profiles, the client must trigger 100 API signature requests. This creates huge latency.
+* **The Rotating Signature Cache Buster:** Because presigned URLs expire, the signature parameters in the query string (`?X-Amz-Signature=...`) change on every signature request. The browser treats each signed URL as a unique resource. Consequently, **the browser cannot cache the image locally**, forcing the client to download the image binary repeatedly. This results in slow page renders and spikes your AWS egress bandwidth bills.
+
+#### Why Next.js (Hybrid) has a built-in alternative:
+Next.js is a hybrid framework running a backend Node.js server. Next.js can act as the image proxy itself via API routes (e.g. `/api/img/[...key]`). The server pulls the image buffer from S3 using IAM credentials and streams it to the browser with fixed caching headers (`Cache-Control: public, immutable`).
+* Next.js's built-in image optimizer (`next/image`) automatically handles resizing, WebP conversion, and stores the optimized results on the server's local disk cache. Sub-requests are served instantly from Next.js memory, mitigating the need for an external CDN in small-to-medium systems.
+
+---
+
+### Security Myths & "Denial of Wallet" Risks of S3 Direct URLs
+
+#### Myth 1: "I can just make my S3 bucket public, it's just user avatars."
+**Vulnerability: Data Harvesting & Privacy Violations**
+If you make your S3 bucket public:
+* Anyone can list all the files in your bucket by hitting the root URL (`https://yourbucket.s3.amazonaws.com/`). This allows bots to harvest user photos and construct user lists.
+* Attackers can upload files to your bucket if permissions are misconfigured, or delete existing objects.
+
+#### Myth 2: "Presigned GET URLs protect my bucket from public abuse."
+**Vulnerability: Denial of Wallet (DoW) / Financial Attacks**
+Even if S3 remains private and you generate presigned GET URLs:
+* S3 has **no built-in rate limiting**. If an attacker scrapes the presigned URLs (which are valid for, say, 1 hour), they can write a script to request those URLs millions of times. 
+* S3 charges per GET request ($0.0004 per 1,000 requests) and for data egress ($0.09 per GB). An attacker downloading a 50MB file 100,000 times will cost you **$450.00** in a few minutes. This is called a **Denial of Wallet (DoW) attack**.
+* A CDN (like CloudFront) shields S3 behind edge caches. The file is requested from S3 only once. Future requests are served from the CDN edge cache, meaning your S3 bucket is never hit directly, protecting you from massive billing spikes.
+
+---
+
+## <span style="color:#3b82f6; background-color:#eff6ff; padding: 4px 8px; border-radius: 4px; display: inline-block;">4. Next.js vs. ReactJS Frontend Implementations (Side-by-Side)</span>
+
+While Next.js provides hybrid (server/client) runtime rendering out of the box, ReactJS runs strictly as a Single Page Application (SPA) inside the client browser. 
+
+### Comparison Table
+
+| Architecture Dimension | 🌐 ReactJS (SPA) | ⚡ Next.js (Hybrid Framework) |
+| :--- | :--- | :--- |
+| **API Domain & Routing** | External API (e.g. `api.domain.com`). Needs explicit backend **CORS** configuration. | Local API path proxy (`/api/...`). Avoids CORS complications. |
+| **Image Rendering** | Standard raw `<img>` tag. Optimization must be handled by CloudFront CDN or custom tools. | Built-in `<Image />` component. Performs on-the-fly resizing & lazy loading. |
+| **Environment Variables** | Build-time injected (`VITE_API_URL` / `REACT_APP_`). No server-side runtime variables. | Both build-time public variables (`NEXT_PUBLIC_`) and runtime server variables. |
+| **Local Dev Server Proxy** | Configured in `vite.config.ts` or `webpack.config.js`. | Configured in `next.config.js`. |
+
+---
+
+### ReactJS SPA Implementation Blueprint (Vite-based)
+
+#### 1. Dev Server Proxy Configuration (`vite.config.ts`)
+To prevent CORS blockers during local development, configure a proxy that routes client `/api` requests directly to your NestJS server.
 
 ```typescript
-// Location: src/shared/useProfileUpload.ts
-// Requesting a signed URL from the backend
-const presignRes = await fetch("/api/s3/presign", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    filename: file.name,
-    contentType: file.type,
-    size: file.size,
-  }),
+// vite.config.ts
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3000', // Path to NestJS backend
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+    },
+  },
 });
-const { uploadUrl, imageKey } = await presignRes.json();
+```
+
+#### 2. React Direct S3 Upload Hook (`useReactProfileUpload.ts`)
+This React hook initiates pre-signing against the external NestJS API, PUTs the raw binary directly to S3, and saves metadata.
+
+```typescript
+// useReactProfileUpload.ts
+import { useState, useRef, FormEvent } from 'react';
+
+// Read API base URL from build-time configuration
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
+
+export function useReactProfileUpload() {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [form, setForm] = useState({ fullName: '', jobTitle: '', company: '' });
+  const [file, setFile] = useState<File | null>(null);
+  const [status, setStatus] = useState<'idle' | 'presigning' | 'uploading' | 'saving' | 'complete'>('idle');
+  const [error, setError] = useState<string | null>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = e.target.files?.[0];
+    if (selected) setFile(selected);
+  };
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!file) return setError('Please select an image first.');
+    setError(null);
+    setStatus('presigning');
+
+    try {
+      // 1. Fetch pre-signed PUT URL from NestJS backend
+      const presignRes = await fetch(`${API_BASE}/s3/presign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: file.name, contentType: file.type }),
+      });
+      if (!presignRes.ok) throw new Error('Failed to get presigned URL.');
+      const { uploadUrl, imageKey } = await presignRes.json();
+
+      // 2. Upload file binary directly to AWS S3
+      setStatus('uploading');
+      const uploadRes = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type },
+        body: file, // Send raw file binary body
+      });
+      if (!uploadRes.ok) throw new Error('S3 direct upload failed.');
+
+      // 3. Persist profile document to MongoDB via NestJS
+      setStatus('saving');
+      const profileRes = await fetch(`${API_BASE}/profiles`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, imageKey }),
+      });
+      if (!profileRes.ok) throw new Error('Failed to save profile details.');
+
+      setStatus('complete');
+      setFile(null);
+    } catch (err: any) {
+      setError(err.message || 'Something went wrong.');
+      setStatus('idle');
+    }
+  };
+
+  return { form, setForm, file, handleFileChange, fileInputRef, status, error, handleSubmit };
+}
+```
+
+#### 3. Optimized React Image Component with Async Fallbacks (`OptimizedImage.tsx`)
+Unlike Next.js which has a built-in `<Image />` component, React uses standard HTML `<img>` tags. Since thumbnails are generated asynchronously in S3 by Lambda, the client should query the CloudFront CDN paths with fallback triggers.
+
+```tsx
+// OptimizedImage.tsx
+import React, { useState } from 'react';
+
+interface OptimizedImageProps {
+  imageKey: string;
+  alt: string;
+}
+
+export const OptimizedImage: React.FC<OptimizedImageProps> = ({ imageKey, alt }) => {
+  const CLOUDFRONT_URL = import.meta.env.VITE_CDN_URL || 'https://cdn.mycompany.com';
+  
+  // Point raw tag to CloudFront thumbnail path (processed asynchronously by Lambda)
+  const thumbnailUrl = `${CLOUDFRONT_URL}/uploads/thumbnails/${imageKey.replace('uploads/raw/', '')}.webp`;
+  const originalUrl = `${CLOUDFRONT_URL}/${imageKey}`;
+
+  const [src, setSrc] = useState(thumbnailUrl);
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      loading="lazy"
+      onError={() => {
+        // If the optimized thumbnail doesn't exist yet (still processing in Lambda),
+        // fallback to the original raw image URL temporarily
+        if (src !== originalUrl) {
+          setSrc(originalUrl);
+        }
+      }}
+      style={{
+        width: '150px',
+        height: '150px',
+        objectFit: 'cover',
+        borderRadius: '50%',
+        backgroundColor: '#e2e8f0',
+      }}
+    />
+  );
+};
 ```
 
 ---
 
-### Step 2: Input Validation (Controller Layer)
+## <span style="color:#059669; background-color:#ecfdf5; padding: 4px 8px; border-radius: 4px; display: inline-block;">5. Enterprise Production Flow (Corporate Architecture)</span>
 
-The API route forwards the payload to the controller, which parses and validates parameters using Zod.
+How do high-traffic tech platforms (e.g. Netflix, Airbnb, Amazon) scale direct-to-S3 uploads and millions of optimized image deliveries globally?
+
+### Scale & Architecture Blueprint
+1. **Edge Upload Ingress:** Client uploads bypass the app servers and connect directly to the nearest S3 edge location using **S3 Transfer Acceleration** (Anycast routing over AWS backbone).
+2. **On-Demand Dynamic Resizing (CDN pull-based):**
+   Instead of preprocessing thumbnails for dozens of screen sizes using S3 Lambda triggers, enterprise systems use **CloudFront + Lambda@Edge/CloudFront Functions + Sharp** to dynamically resize images *on the fly*.
+   - Saves petabytes of S3 storage costs.
+   - Images are only generated at the exact requested width/height on-demand and cached directly at the CDN edges.
+
+```mermaid
+flowchart TD
+    Client([React Client]) -->|1. Request /w=300,h=300/photo.jpg| CF["CloudFront CDN Edge Cache"]
+    CF -->|2. Cache Miss| LambdaEdge["Lambda@Edge Resizer (Sharp)"]
+    LambdaEdge -->|3. Fetch Original| S3Raw[("S3 Bucket (Originals)")]
+    S3Raw -->|4. Original Image Buffer| LambdaEdge
+    LambdaEdge -->|5. Resize On-The-Fly| CF
+    CF -->|6. Cache WebP at Edge & Return| Client
+```
+
+---
+
+## <span style="color:#4f46e5; background-color:#e0e7ff; padding: 4px 8px; border-radius: 4px; display: inline-block;">6. Advanced NestJS Backend Verification Checklist</span>
+
+To prevent malicious clients from hacking your storage (e.g., uploading massive videos to image endpoints, executing path-traversal attacks, or bypassing database registrations), NestJS MUST validate files on S3 before finalizing.
+
+### Backend Validation Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as React Client
+    participant Nest as NestJS API
+    participant S3 as AWS S3 Bucket
+    participant DB as MongoDB
+
+    Client->>Nest: POST /api/profiles (fullName, jobTitle, company, imageKey)
+    activate Nest
+    Note over Nest: Step 1: Validate S3 Key Format
+    Nest->>Nest: Verify key matches /^uploads\/raw\/[a-f0-9-]{36}-.+\.(jpg|jpeg|png|webp)$/i
+    
+    Note over Nest: Step 2: Query S3 Object Metadata
+    Nest->>S3: HeadObjectCommand(Bucket, Key)
+    S3-->>Nest: Return Object Metadata (ContentLength, ContentType)
+    
+    Note over Nest: Step 3: Enforce Size and Type Constraints
+    Nest->>Nest: Check ContentLength <= 5MB AND ContentType is image/*
+    
+    alt Validation Failed
+        Nest-->>Client: HTTP 400 Bad Request (File is too large or invalid format)
+    else Validation Passed
+        Nest->>DB: Save Profile Document
+        DB-->>Nest: Saved
+        Nest->>S3: DeleteObjectTaggingCommand(Bucket, Key)
+        S3-->>Nest: Tag removed (cleanup=false)
+        Nest-->>Client: HTTP 201 Created (Profile Success)
+    end
+    deactivate Nest
+```
+
+### Implementing Validation in NestJS Controller
 
 ```typescript
-// Location: src/modules/profiles/profiles.schema.ts
-import { z } from "zod";
+// profiles.controller.ts
+import { Controller, Post, Body, BadRequestException } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { S3Client, HeadObjectCommand, DeleteObjectTaggingCommand } from '@aws-sdk/client-s3';
+import { Profile, ProfileDocument } from './profile.schema';
 
-export const presignUploadSchema = z.object({
-  filename: z.string().min(1).max(255),
-  contentType: z.enum(["image/jpeg", "image/png", "image/webp"]),
-  size: z.number().max(5 * 1024 * 1024), // 5MB limit
-});
+@Controller('profiles')
+export class ProfilesController {
+  private s3Client = new S3Client({ region: process.env.AWS_REGION });
+  private bucketName = process.env.S3_BUCKET_NAME;
 
-// Location: src/modules/profiles/profiles.controller.ts
-export async function presignUpload(req: Request) {
-  const parsed = presignUploadSchema.safeParse(await req.json());
-  if (!parsed.success) return validationFail(parsed.error);
+  constructor(@InjectModel(Profile.name) private profileModel: Model<ProfileDocument>) {}
 
-  const result = await ProfilesService.presignUpload(parsed.data);
-  return NextResponse.json(result, { status: 201 });
+  @Post()
+  async createProfile(@Body() body: any) {
+    const { fullName, jobTitle, company, imageKey } = body;
+
+    // ── STEP 1: VALIDATE S3 KEY REGEX PATTERN ─────────────────────────
+    // Prevent path traversal attacks (../) and ensure S3 key namespace is correct
+    const s3KeyPattern = /^uploads\/raw\/[a-f0-9-]{36}-.+\.(jpg|jpeg|png|webp)$/i;
+    if (!s3KeyPattern.test(imageKey)) {
+      throw new BadRequestException('Invalid S3 object key format.');
+    }
+
+    try {
+      // ── STEP 2: QUERY S3 OBJECT METADATA ───────────────────────────
+      const s3Metadata = await this.s3Client.send(
+        new HeadObjectCommand({
+          Bucket: this.bucketName,
+          Key: imageKey,
+        })
+      );
+
+      // ── STEP 3: ENFORCE FILE CONSTRAINTS ON BACKEND ─────────────────
+      const maxSize = 5 * 1024 * 1024; // 5MB limit
+      const allowedMimes = ['image/jpeg', 'image/png', 'image/webp'];
+
+      if (!s3Metadata.ContentLength || s3Metadata.ContentLength > maxSize) {
+        throw new BadRequestException('Uploaded file exceeds the 5MB size limit.');
+      }
+      
+      if (!s3Metadata.ContentType || !allowedMimes.includes(s3Metadata.ContentType)) {
+        throw new BadRequestException('Uploaded file type is not allowed.');
+      }
+
+      // ── STEP 4: PERSIST TO DATABASE ─────────────────────────────────
+      const newProfile = new this.profileModel({ fullName, jobTitle, company, imageKey });
+      const savedProfile = await newProfile.save();
+
+      // ── STEP 5: PEEL OFF CLEANUP TAG (SAVE FROM LIFECYCLE) ───────────
+      // Removing this tag exempts the object from automatic 24h cleanup deletion
+      await this.s3Client.send(
+        new DeleteObjectTaggingCommand({
+          Bucket: this.bucketName,
+          Key: imageKey,
+        })
+      );
+
+      return savedProfile;
+    } catch (err: any) {
+      if (err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) {
+        throw new BadRequestException('The specified image was not found on S3. Upload might have failed.');
+      }
+      throw err;
+    }
+  }
 }
 ```
 
 ---
 
-### Step 3: URL Signer (Service & Storage Layer)
+## <span style="color:#c026d3; background-color:#fae8ff; padding: 4px 8px; border-radius: 4px; display: inline-block;">7. Porting to NestJS (Enterprise Architecture Blueprint)</span>
 
-The service generates a unique S3 key using a UUID and asks the low-level `StorageService` to generate the URL with a **5-minute expiration time**.
+When implementing this pattern in a production NestJS backend, we decouple S3 operations, controllers, and schemas using TypeScript, Dependency Injection, and NestJS Config module.
+
+### Layer Boundaries Diagram
+
+```mermaid
+flowchart LR
+    Client([React Client])
+    
+    subgraph NestJS ["NestJS Application Container"]
+        Controller["S3Controller<br/>(Request Routing & DTOs)"]
+        Service["StorageService<br/>(S3 Client SDK Wrapper)"]
+        Config["ConfigModule<br/>(Environment Parsing)"]
+    end
+    
+    S3[("AWS S3 Bucket")]
+    
+    Client -->|1. Request URLs| Controller
+    Controller -->|2. Injects Config| Service
+    Service -->|3. Reads env| Config
+    Service -->|4. Cryptographic Sig| S3
+    Service -->|5. Return URL| Controller
+    Controller -->|6. Return URL| Client
+```
+
+### 1. DTO Definitions (`s3.dto.ts`)
+We use `class-validator` and `class-transformer` to parse and validate client parameters before execution.
 
 ```typescript
-// Location: src/modules/profiles/profiles.service.ts
-export const ProfilesService = {
-  async presignUpload(data: PresignUploadDto) {
-    // Sanitize filename to prevent directory traversal or invalid characters
-    const imageKey = `uploads/raw/${randomUUID()}-${sanitizeFilename(data.filename)}`;
-    const uploadUrl = await StorageService.createPutUrl({
-      key: imageKey,
-      contentType: data.contentType,
-    });
-    return { uploadUrl, imageKey };
-  },
-};
+// s3.dto.ts
+import { IsString, IsNotEmpty, IsNumber, IsArray, ValidateNested, IsOptional } from 'class-validator';
+import { Type } from 'class-transformer';
 
-// Location: src/modules/storage/storage.service.ts
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+export class PresignDto {
+  @IsString()
+  @IsNotEmpty()
+  filename: string;
 
-export const StorageService = {
-  async createPutUrl(input: {
-    key: string;
-    contentType: string;
-  }): Promise<string> {
-    const s3Client = new S3Client({
-      region: process.env.AWS_REGION,
+  @IsString()
+  @IsNotEmpty()
+  contentType: string;
+
+  @IsString()
+  @IsOptional()
+  contentMd5?: string;
+}
+
+export class InitMultipartDto {
+  @IsString()
+  @IsNotEmpty()
+  filename: string;
+
+  @IsString()
+  @IsNotEmpty()
+  contentType: string;
+
+  @IsNumber()
+  size: number;
+}
+
+export class PartDto {
+  @IsNumber()
+  PartNumber: number;
+
+  @IsString()
+  @IsNotEmpty()
+  ETag: string;
+}
+
+export class CompleteMultipartDto {
+  @IsString()
+  @IsNotEmpty()
+  key: string;
+
+  @IsString()
+  @IsNotEmpty()
+  uploadId: string;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PartDto)
+  parts: PartDto[];
+}
+```
+
+### 2. S3 Core SDK Wrapper (`storage.service.ts`)
+This low-level service abstracts AWS SDK commands. Note the implementation of `removeCleanupTag`.
+
+```typescript
+// storage.service.ts
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { 
+  S3Client, 
+  PutObjectCommand, 
+  CreateMultipartUploadCommand, 
+  UploadPartCommand, 
+  CompleteMultipartUploadCommand,
+  DeleteObjectTaggingCommand 
+} from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+
+@Injectable()
+export class StorageService {
+  private s3Client: S3Client;
+  private bucketName: string;
+
+  constructor(private configService: ConfigService) {
+    this.s3Client = new S3Client({
+      region: this.configService.get<string>('AWS_REGION'),
       credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+        accessKeyId: this.configService.get<string>('AWS_ACCESS_KEY_ID'),
+        secretAccessKey: this.configService.get<string>('AWS_SECRET_ACCESS_KEY'),
       },
     });
-
-    return getSignedUrl(
-      s3Client,
-      new PutObjectCommand({
-        Bucket: process.env.S3_BUCKET_NAME,
-        Key: input.key,
-        ContentType: input.contentType,
-      }),
-      { expiresIn: 300 }, // URL expires in 300 seconds (5 minutes)
-    );
-  },
-};
-```
-
----
-
-### Step 4: Direct S3 Upload (Client)
-
-The client receives the `uploadUrl` and performs a raw `PUT` request to upload the image directly to AWS S3.
-
-```typescript
-// Location: src/shared/useProfileUpload.ts
-const uploadRes = await fetch(uploadUrl, {
-  method: "PUT",
-  headers: { "Content-Type": file.type }, // Content-Type must match what was signed!
-  body: file, // Raw binary body
-});
-
-if (!uploadRes.ok) throw new Error("S3 Upload failed");
-```
-
----
-
-### Step 5: Save Metadata to Database (Client & DB)
-
-Once the upload finishes successfully, the client posts the form text fields alongside the `imageKey` to be saved in MongoDB.
-
-```typescript
-// Location: src/shared/useProfileUpload.ts
-const profileRes = await fetch("/api/profiles", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ ...form, imageKey }), // Send key, not the binary!
-});
-```
-
----
-
-### Step 6: Background Image Optimization (AWS Lambda)
-
-As soon as S3 confirms the object has been uploaded, S3 triggers the Lambda function to optimize the image asynchronously.
-
-```javascript
-// Location: lambda/thumbnail-generator/index.mjs
-import {
-  GetObjectCommand,
-  PutObjectCommand,
-  S3Client,
-} from "@aws-sdk/client-s3";
-import sharp from "sharp";
-
-const s3 = new S3Client({});
-
-export const handler = async (event) => {
-  for (const record of event.Records) {
-    const bucket = record.s3.bucket.name;
-    const rawKey = decodeURIComponent(record.s3.object.key.replace(/\+/g, " "));
-
-    // 1. Download original from S3
-    const object = await s3.send(
-      new GetObjectCommand({ Bucket: bucket, Key: rawKey }),
-    );
-    const sourceBuffer = await streamToBuffer(object.Body);
-
-    // 2. Process image with Sharp
-    const thumbnail = await sharp(sourceBuffer)
-      .rotate() // Auto-orient based on EXIF orientation data
-      .resize(150, 150, { fit: "cover", position: "attention" }) // Face-detect cropping
-      .webp({ quality: 78 })
-      .toBuffer();
-
-    // 3. Save thumbnail back to S3
-    const thumbnailKey =
-      rawKey.replace("uploads/raw/", "uploads/thumbnails/") + ".webp";
-    await s3.send(
-      new PutObjectCommand({
-        Bucket: bucket,
-        Key: thumbnailKey,
-        Body: thumbnail,
-        ContentType: "image/webp",
-        CacheControl: "public, max-age=31536000, immutable",
-      }),
-    );
+    this.bucketName = this.configService.get<string>('S3_BUCKET_NAME');
   }
-};
+
+  /**
+   * Generates a presigned PUT URL for standard uploads
+   */
+  async createPutUrl(key: string, contentType: string, contentMd5?: string): Promise<string> {
+    const command = new PutObjectCommand({
+      Bucket: this.bucketName,
+      Key: key,
+      ContentType: contentType,
+      Tagging: 'cleanup=true', // Tags object for cleanup
+      ContentMD5: contentMd5,
+    });
+    
+    return getSignedUrl(this.s3Client, command, {
+      expiresIn: 300, // 5 minutes expiration
+      signableHeaders: new Set(['content-type', 'content-md5']),
+    });
+  }
+
+  /**
+   * Initiates multipart upload session
+   */
+  async initiateMultipartUpload(key: string, contentType: string): Promise<string> {
+    const command = new CreateMultipartUploadCommand({
+      Bucket: this.bucketName,
+      Key: key,
+      ContentType: contentType,
+      Tagging: 'cleanup=true',
+    });
+    const res = await this.s3Client.send(command);
+    if (!res.UploadId) throw new Error('Failed to initiate S3 multipart upload.');
+    return res.UploadId;
+  }
+
+  /**
+   * Generates a pre-signed URL for a specific multipart block
+   */
+  async createUploadPartUrl(key: string, uploadId: string, partNumber: number): Promise<string> {
+    const command = new UploadPartCommand({
+      Bucket: this.bucketName,
+      Key: key,
+      UploadId: uploadId,
+      PartNumber: partNumber,
+    });
+    return getSignedUrl(this.s3Client, command, { expiresIn: 1200 }); // 20 minutes
+  }
+
+  /**
+   * Completes the multipart upload session
+   */
+  async completeMultipartUpload(key: string, uploadId: string, parts: { PartNumber: number; ETag: string }[]): Promise<void> {
+    const command = new CompleteMultipartUploadCommand({
+      Bucket: this.bucketName,
+      Key: key,
+      UploadId: uploadId,
+      MultipartUpload: { Parts: parts },
+    });
+    await this.s3Client.send(command);
+  }
+
+  /**
+   * Peels off the cleanup tag, saving the object from automatic deletion
+   */
+  async removeCleanupTag(key: string): Promise<void> {
+    const command = new DeleteObjectTaggingCommand({
+      Bucket: this.bucketName,
+      Key: key,
+    });
+    await this.s3Client.send(command);
+  }
+}
+```
+
+### 3. Controller Routing Layer (`s3.controller.ts`)
+Receives incoming payloads, generates keys, and coordinates with `StorageService` to return URLs.
+
+```typescript
+// s3.controller.ts
+import { Controller, Post, Body, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
+import { StorageService } from './storage.service';
+import { PresignDto, InitMultipartDto, CompleteMultipartDto } from './s3.dto';
+import { v4 as uuidv4 } from 'uuid';
+
+@Controller('s3')
+export class S3Controller {
+  constructor(private readonly storageService: StorageService) {}
+
+  @Post('presign')
+  @HttpCode(HttpStatus.OK)
+  async presign(@Body() dto: PresignDto) {
+    const sanitizedFilename = dto.filename.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_.-]/g, '');
+    const imageKey = `uploads/raw/${uuidv4()}-${sanitizedFilename}`;
+    
+    const uploadUrl = await this.storageService.createPutUrl(
+      imageKey, 
+      dto.contentType, 
+      dto.contentMd5
+    );
+    
+    return { uploadUrl, imageKey };
+  }
+
+  @Post('multipart/init')
+  @HttpCode(HttpStatus.OK)
+  async initMultipart(@Body() dto: InitMultipartDto) {
+    const sanitizedFilename = dto.filename.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_.-]/g, '');
+    const imageKey = `uploads/raw/${uuidv4()}-${sanitizedFilename}`;
+    
+    const uploadId = await this.storageService.initiateMultipartUpload(imageKey, dto.contentType);
+    
+    // Chunk size: 5MB minimum
+    const chunkSize = 5 * 1024 * 1024;
+    const numParts = Math.ceil(dto.size / chunkSize);
+    
+    const partPromises = Array.from({ length: numParts }, async (_, i) => {
+      const partNumber = i + 1;
+      const uploadUrl = await this.storageService.createUploadPartUrl(imageKey, uploadId, partNumber);
+      return { partNumber, uploadUrl };
+    });
+
+    const parts = await Promise.all(partPromises);
+
+    return { uploadId, key: imageKey, parts };
+  }
+
+  @Post('multipart/complete')
+  @HttpCode(HttpStatus.OK)
+  async completeMultipart(@Body() dto: CompleteMultipartDto) {
+    try {
+      await this.storageService.completeMultipartUpload(dto.key, dto.uploadId, dto.parts);
+      return { success: true };
+    } catch (err) {
+      throw new BadRequestException('Failed to complete multipart upload: ' + err.message);
+    }
+  }
+}
+```
+
+### 4. NestJS Module Setup (`s3.module.ts`)
+Integrates the ConfigModule and registers the components inside the NestJS Dependency Injection container.
+
+```typescript
+// s3.module.ts
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { S3Controller } from './s3.controller';
+import { StorageService } from './storage.service';
+
+@Module({
+  imports: [ConfigModule],
+  controllers: [S3Controller],
+  providers: [StorageService],
+  exports: [StorageService], // Expose to let other modules (e.g., ProfilesModule) perform tag cleanup
+})
+export class S3Module {}
 ```
 
 ---
 
-## <span style="color:#0284c7; background-color:#e0f2fe; padding: 4px 8px; border-radius: 4px; display: inline-block;">5. AWS Cloud Infrastructure Setup</span>
+## <span style="color:#0284c7; background-color:#e0f2fe; padding: 4px 8px; border-radius: 4px; display: inline-block;">8. AWS Cloud Infrastructure Setup</span>
 
-For this to work smoothly, you must configure **CORS** (Cross-Origin Resource Sharing) and **IAM Policies** correctly in AWS.
+For this to work smoothly, configure **CORS** and **IAM Policies** correctly in AWS.
 
 ### 1. S3 Bucket CORS Policy
-
-By default, browsers reject `PUT` requests to S3 due to CORS. You must add the following JSON policy under S3 Bucket $\rightarrow$ **Permissions** $\rightarrow$ **CORS configuration**:
+Browsers reject direct `PUT` requests to S3 due to CORS. Add this policy in S3 Bucket $\rightarrow$ **Permissions** $\rightarrow$ **CORS configuration**:
 
 ```json
 [
@@ -364,12 +836,8 @@ By default, browsers reject `PUT` requests to S3 due to CORS. You must add the f
 ]
 ```
 
-> [!WARNING]
-> Ensure the S3 `AllowedHeaders` matches the headers you send in your browser's fetch call. If you pass tagging or metadata headers during the upload (such as `x-amz-tagging` or `x-amz-meta-*`), those headers must be explicitly added to `AllowedHeaders` or the pre-flight request will fail.
-
 ### 2. IAM Policy (Security Principle of Least Privilege)
-
-The Next.js server credentials (`AWS_ACCESS_KEY_ID`) do not need full administrative permissions. Create an IAM policy with only the minimum required permissions (including tag removal):
+Ensure the API credentials do not have full admin access. Use an IAM policy with only the minimum required S3 permissions:
 
 ```json
 {
@@ -392,109 +860,310 @@ The Next.js server credentials (`AWS_ACCESS_KEY_ID`) do not need full administra
 
 ---
 
-## <span style="color:#a855f7; background-color:#f3e8ff; padding: 4px 8px; border-radius: 4px; display: inline-block;">5b. Unified S3 Upload Flow (Standard vs Multipart)</span>
+## <span style="color:#a21caf; background-color:#fdf4ff; padding: 4px 8px; border-radius: 4px; display: inline-block;">9. Local File System Caching & Production Alternatives</span>
 
-To handle files of all sizes optimally, the application implements a unified direct-to-S3 upload mechanism. It dynamically selects between a **Standard Single Upload** and an **S3 Multipart Upload** based on the file size.
+In systems where deploying a Content Delivery Network (CDN) like AWS CloudFront is cost-prohibitive, complex, or unavailable, **Local File System Caching** serves as a powerful alternative. By proxying S3 assets through your backend NestJS/Node server and caching them on the local disk, you can dramatically improve response speeds and eliminate S3 read/egress costs for frequently requested images.
 
-### Internal Upload Flow Diagram
+---
+
+### Caching Architecture (Read-Through Proxy Pattern)
+
+Rather than redirecting the client browser directly to AWS S3, the browser calls an image endpoint hosted on the application server. The backend acts as a **Read-Through Proxy** with a local caching layer:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Client Browser
+    participant Nest as NestJS Backend Server
+    participant Disk as Local Disk Cache
+    participant S3 as AWS S3 Bucket
+
+    Client->>Nest: GET /api/img/uploads/thumbnails/image-123.webp
+    activate Nest
+    Nest->>Disk: Check if file exists (fs.existsSync)
+    
+    alt Cache Hit (Instant Response & Zero S3 Overhead)
+        Disk-->>Nest: File exists (File descriptor found)
+        Nest->>Disk: Open file stream (fs.createReadStream)
+        Disk-->>Nest: Binary Stream
+        Nest-->>Client: Stream bytes (HTTP 200 OK + Cache-Control)
+    else Cache Miss (Downstream Fetch, Write & Stream)
+        Disk-->>Nest: File does not exist (ENOENT)
+        Nest->>S3: GetObjectCommand(Key: uploads/thumbnails/image-123.webp)
+        S3-->>Nest: Return S3 Binary stream (Readable)
+        Nest->>Disk: Pipe stream to local cache path (fs.createWriteStream)
+        Nest->>Client: Stream S3 bytes concurrently (PassThrough stream)
+    end
+    deactivate Nest
+```
+
+---
+
+### Implementation Blueprint in NestJS
+
+This enterprise implementation sets up a dedicated caching directory, intercepts image GET requests, reads from disk if available, or streams from S3 while asynchronously writing to disk concurrently.
+
+#### 1. Local Cache Service (`local-cache.service.ts`)
+
+```typescript
+// local-cache.service.ts
+import { Injectable, StreamableFile, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import * as fs from 'fs';
+import * as path from 'path';
+import { Readable, PassThrough } from 'stream';
+
+@Injectable()
+export class LocalCacheService {
+  private s3Client: S3Client;
+  private bucketName: string;
+  private cacheDir: string;
+
+  constructor(private configService: ConfigService) {
+    this.s3Client = new S3Client({
+      region: this.configService.get<string>('AWS_REGION'),
+    });
+    this.bucketName = this.configService.get<string>('S3_BUCKET_NAME');
+    
+    // Configure cache directory under workspace root
+    this.cacheDir = path.join(process.cwd(), 'cache');
+    if (!fs.existsSync(this.cacheDir)) {
+      fs.mkdirSync(this.cacheDir, { recursive: true });
+    }
+  }
+
+  async getCachedImage(imageKey: string): Promise<StreamableFile> {
+    // Prevent directory traversal attacks (e.g., key containing ../../)
+    const sanitizedKey = path.normalize(imageKey).replace(/^(\.\.(\/|\\))+/, '');
+    const localFilePath = path.join(this.cacheDir, sanitizedKey);
+    const localFileDir = path.dirname(localFilePath);
+
+    // ── STEP 1: CACHE HIT (SERVE DIRECTLY FROM DISK) ──────────────────
+    if (fs.existsSync(localFilePath)) {
+      const fileStream = fs.createReadStream(localFilePath);
+      return new StreamableFile(fileStream);
+    }
+
+    // ── STEP 2: CACHE MISS (PULL FROM S3 & WRITE TO DISK) ──────────────
+    try {
+      const response = await this.s3Client.send(
+        new GetObjectCommand({
+          Bucket: this.bucketName,
+          Key: imageKey,
+        })
+      );
+
+      const s3Stream = response.Body as Readable;
+      if (!s3Stream) {
+        throw new NotFoundException('Requested object is empty.');
+      }
+
+      // Ensure target cache subdirectory exists
+      if (!fs.existsSync(localFileDir)) {
+        fs.mkdirSync(localFileDir, { recursive: true });
+      }
+
+      // Open a write stream to save the file locally
+      const writeStream = fs.createWriteStream(localFilePath);
+      
+      // Use PassThrough to write to disk and stream to client concurrently
+      const clientStream = new PassThrough();
+      
+      s3Stream.pipe(writeStream);
+      s3Stream.pipe(clientStream);
+
+      // Handle stream logging & errors
+      writeStream.on('error', (err) => {
+        console.error(`Cache Write Error for file ${imageKey}:`, err);
+      });
+
+      return new StreamableFile(clientStream);
+    } catch (err: any) {
+      if (err.name === 'NoSuchKey' || err.$metadata?.httpStatusCode === 404) {
+        throw new NotFoundException('The requested asset does not exist on S3.');
+      }
+      throw new InternalServerErrorException('Failed to retrieve S3 asset: ' + err.message);
+    }
+  }
+
+  /**
+   * Invalidates a specific cached key (called when S3 objects are updated/deleted)
+   */
+  async invalidateKey(imageKey: string): Promise<void> {
+    const sanitizedKey = path.normalize(imageKey).replace(/^(\.\.(\/|\\))+/, '');
+    const localFilePath = path.join(this.cacheDir, sanitizedKey);
+    
+    if (fs.existsSync(localFilePath)) {
+      await fs.promises.unlink(localFilePath);
+      console.log(`[Cache Invalidation] Evicted: ${imageKey}`);
+    }
+  }
+}
+```
+
+#### 2. Local Cache Controller Routing (`local-cache.controller.ts`)
+
+```typescript
+// local-cache.controller.ts
+import { Controller, Get, Param, Res, Header, StreamableFile, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { LocalCacheService } from './local-cache.service';
+
+@Controller('api/img')
+export class LocalCacheController {
+  constructor(private readonly cacheService: LocalCacheService) {}
+
+  @Get('uploads/thumbnails/:filename')
+  @Header('Cache-Control', 'public, max-age=31536000, immutable') // Cache in browser for 1 year
+  @Header('Content-Type', 'image/webp')
+  async getThumbnail(@Param('filename') filename: string): Promise<StreamableFile> {
+    const s3Key = `uploads/thumbnails/${filename}`;
+    return this.cacheService.getCachedImage(s3Key);
+  }
+
+  @Get('uploads/raw/:filename')
+  @Header('Cache-Control', 'public, max-age=86400') // Cache raw images locally for 24h
+  @Header('Content-Type', 'image/jpeg')
+  async getRawImage(@Param('filename') filename: string): Promise<StreamableFile> {
+    const s3Key = `uploads/raw/${filename}`;
+    return this.cacheService.getCachedImage(s3Key);
+  }
+
+  // Webhook Receiver for S3 Object Events to automate invalidation
+  @Post('cache-invalidate')
+  @HttpCode(HttpStatus.OK)
+  async invalidateCache(@Body() payload: { key: string }) {
+    if (payload.key) {
+      await this.cacheService.invalidateKey(payload.key);
+      return { status: 'success', evicted: payload.key };
+    }
+    return { status: 'ignored' };
+  }
+}
+```
+
+---
+
+### Critical Challenges & Production Mitigations
+
+#### 1. Disk Space Exhaustion (Least Recently Used Eviction)
+**The Problem:** In a high-traffic app, local disk space is finite. If millions of thumbnails are written to the `cache/` directory, the server hard drive will run out of space and crash.
+
+**The Solution:** Implement a background Cron worker inside NestJS that audits the cache folder weekly or daily. It inspects file access times (`atime`) and evicts the least recently accessed files until the directory size falls below a target threshold (e.g. 5GB).
+
+```typescript
+// cache-pruner.cron.ts (Pseudocode for Cache Eviction)
+import { Injectable } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import * as fs from 'fs';
+import * as path from 'path';
+
+@Injectable()
+export class CachePrunerCron {
+  private cacheDir = path.join(process.cwd(), 'cache');
+  private maxCacheSizeInBytes = 5 * 1024 * 1024 * 1024; // 5 GB limit
+
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  async pruneCache() {
+    console.log('[Cache Pruner] Starting audit...');
+    const files = await this.getAllCacheFiles(this.cacheDir);
+    
+    let currentSize = files.reduce((acc, f) => acc + f.size, 0);
+    if (currentSize <= this.maxCacheSizeInBytes) return;
+
+    // Sort files by last accessed time (oldest first)
+    files.sort((a, b) => a.atimeMs - b.atimeMs);
+
+    for (const file of files) {
+      if (currentSize <= this.maxCacheSizeInBytes * 0.8) {
+        break; // Evict until we are down to 80% quota (4GB)
+      }
+      await fs.promises.unlink(file.path);
+      currentSize -= file.size;
+      console.log(`[Cache Pruner] Evicted due to disk limits: ${file.path}`);
+    }
+  }
+
+  private async getAllCacheFiles(dir: string): Promise<{ path: string; size: number; atimeMs: number }[]> {
+    // Recursively scans files, calls fs.promises.stat() and returns statistics
+    // ...
+    return [];
+  }
+}
+```
+
+#### 2. Event-Driven Cache Invalidation (Handling Updates/Deletions)
+**The Problem:** If a profile avatar is deleted or updated directly in S3, the NestJS server will continue serving the old image from disk.
+
+**The Solution:** Set up an AWS EventBridge or S3 SNS/SQS event listener. Whenever a modification occurs (`s3:ObjectRemoved:*` or `s3:ObjectCreated:*`), S3 issues a notification message. We configure a webhook endpoint in NestJS (`/api/img/cache-invalidate`) that receives this payload and deletes the local cached file.
 
 ```mermaid
 flowchart TD
-    A([User Selects File & Clicks Submit]) --> B{File Size > 5MB?}
-
-    %% Path A: Small Files
-    B -->|No: Small File| C[Standard Single Upload]
-    C --> D[POST /api/s3/presign]
-    D --> E[GET PutObject Presigned URL]
-    E --> F[PUT File body with cleanup=true tag]
-    F --> G[POST /api/profiles]
-
-    %% Path B: Large Files
-    B -->|Yes: Large File| H[Multipart Chunked Upload]
-    H --> I[POST /api/s3/multipart/init]
-    I --> J[S3: CreateMultipartUpload]
-    J --> K[Generate Presigned URLs for all 5MB chunks]
-    K --> L[PUT chunks concurrently concurrency limit: 3]
-    L --> M[POST /api/s3/multipart/complete]
-    M --> N[S3: CompleteMultipartUpload]
-    N --> G
-
-    %% Finalize & Cleanup
-    G --> O[DB: Save Profile Document]
-    O --> P[S3: DeleteObjectTagging removes cleanup tag]
-    P --> Q([Upload Complete & Saved])
+    Admin[User/Admin] -->|"1. Delete / Update Asset"| S3[("AWS S3 Bucket")]
+    S3 -->|"2. ObjectRemoved / ObjectCreated Event"| SNS["AWS SNS / SQS Broker"]
+    SNS -->|"3. HTTP POST Webhook Payload"| Nest["NestJS Webhook (/api/img/cache-invalidate)"]
+    Nest -->|"4. Check if file is on local disk"| Disk{"File Exists?"}
+    Disk -->|Yes| Delete["5. fs.unlink(localCachedFile)"]
+    Disk -->|No| Ignore["Ignore / Pass"]
+    Delete --> Done["Cache is now validated (Clean)"]
 ```
 
-### Flow Comparison
+#### 3. Scaling out (Multi-Instance / Cluster Desynchronization)
+**The Problem:** If you run NestJS on a cluster of multiple servers (e.g. Kubernetes with multiple pods or PM2 processes), each server has its own isolated file system. If Pod A invalidates its local cache, Pod B still has a stale cache copy. Similarly, cache hits are not shared.
 
-| Feature | ⚡ Standard Upload (≤ 5MB) | 🚀 Multipart Upload (> 5MB) |
-| :--- | :--- | :--- |
-| **Use Case** | Quick avatar uploads and small images. | Large high-res profiles, videos, or raw assets up to 200MB. |
-| **API Endpoints** | `POST /api/s3/presign` | `POST /api/s3/multipart/init`<br>`POST /api/s3/multipart/complete` |
-| **Concurrency** | 1 sequential request. | Up to 3 parallel chunk uploads (5MB slices) to maximize bandwidth. |
-| **Fail Safety** | Connection drops abort the entire upload. | Slices are uploaded independently; retries apply at the chunk level. |
-| **Orphaned Cleanup** | Object is tagged with `cleanup=true` at signing. | Upload is initiated with the `cleanup=true` object tag. |
-
-### Code Snippet Reference
-
-#### Client-side Selection (`src/shared/useProfileUpload.ts`)
-```typescript
-const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
-const useMultipart = file.size > CHUNK_SIZE;
-
-if (useMultipart) {
-  // 1. Initiate Multipart
-  const initRes = await fetch("/api/s3/multipart/init", { ... });
-  const { uploadId, key, parts } = await initRes.json();
-
-  // 2. Upload chunks in parallel (concurrency limit: 3)
-  const completedParts = await uploadChunksConcurrently(file, parts, CHUNK_SIZE);
-
-  // 3. Finalize on S3
-  await fetch("/api/s3/multipart/complete", {
-    body: JSON.stringify({ uploadId, key, parts: completedParts })
-  });
-} else {
-  // Standard upload
-  const presignRes = await fetch("/api/s3/presign", { ... });
-  const { uploadUrl, imageKey } = await presignRes.json();
-  await fetch(uploadUrl, { method: "PUT", body: file, headers: { "x-amz-tagging": "cleanup=true" } });
-}
-```
-
-#### Server-side Tag Cleanup on Profile Save (`src/modules/profiles/profiles.service.ts`)
-```typescript
-async create(data: CreateProfileDto) {
-  const profile = await ProfilesRepository.create(data);
-  
-  // Remove the cleanup tag so S3 lifecycle rule does not delete the original image
-  StorageService.removeCleanupTag(data.imageKey).catch((err) => {
-    console.warn(`[ProfilesService.create] Failed to remove S3 cleanup tag:`, err);
-  });
-
-  return profile;
-}
-```
+**The Solutions:**
+1. **Shared Persistent Volumes (NFS / EFS):** Mount a shared network drive (like AWS EFS) under the `cache/` directory. All NestJS pods will read and write to the same shared disk.
+2. **CDN Bypass:** In multi-server enterprise settings, local caching is abandoned in favor of pushing the cache to the CDN edge.
 
 ---
 
-## <span style="color:#16a34a; background-color:#dcfce7; padding: 4px 8px; border-radius: 4px; display: inline-block;">6. Advanced Optimizations & Alternative Designs</span>
+### Alternative Production Caching Strategies (Industry Comparisons)
 
-| Feature / Scenario           | Approach                        | Why & Best Practice                                                                                                                                                                                                                                |
-| :--------------------------- | :------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Large Files (>100MB)** ✅ | **S3 Multipart Uploads**        | Prevents connection drops from ruining the upload. The client requests multiple presigned URLs for different chunks, uploads them concurrently, and S3 stitches them together.                                                                     |
-| **Global Distribution**      | **CloudFront CDN Integrations** | Serving raw assets directly from S3 can be slow and expensive. Pointing a CloudFront Distribution at the `/uploads/thumbnails/` path caches images at edge nodes, reducing latency and S3 egress costs.                                            |
-| **Orphaned Uploads Cleanup** ✅ | **S3 Lifecycle Rules**          | Tag new S3 uploads with `cleanup=true`. When the profile is successfully saved, remove the tag. Configure an S3 Lifecycle Rule to automatically delete objects in `uploads/raw/` with the tag `cleanup=true` after 24 hours. |
-| **Payload Integrity** ✅    | **Content-MD5 validation**      | To guarantee S3 receives exactly what the browser sent, compute an MD5 hash of the file client-side, sign it into the URL, and force S3 to verify the upload hash matching S3's `ETag`.                                                            |
+For high-scale applications, you should evaluate these alternatives to see how big companies achieve sub-millisecond delivery:
 
----
+#### 1. Nginx Reverse Proxy Cache (High Performance, Low Server Overhead)
+Instead of forcing NestJS/Node.js to handle file streaming (which blocks Node's single-threaded event loop), Nginx sits in front of S3. When a file is requested, Nginx handles caching the file on its local disk and serving it directly.
 
-## <span style="color:#dc2626; background-color:#fee2e2; padding: 4px 8px; border-radius: 4px; display: inline-block;">7. Porting to Another Project (Checklist)</span>
+```nginx
+# nginx.conf (Nginx Reverse Proxy cache for Private S3 origin)
+proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=s3_cache:10m max_size=10g inactive=60m use_temp_path=off;
 
-To implement this design pattern in another project:
+server {
+    listen 80;
+    server_name images.yourdomain.com;
 
-1. **Low-level Wrapper:** Copy the `storage.service.ts` helper and adapt the S3 client initialization.
-2. **Environment Variables:** Define `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and `S3_BUCKET_NAME` in your `.env`.
-3. **Zod Validation:** Implement incoming parameters validation (`filename`, `contentType`) to protect against endpoint flooding.
-4. **CORS Configuration:** Configure S3 bucket CORS to allow HTTP `PUT` from your domains.
-5. **Signed Headers:** Ensure headers passed in your client-side fetch `PUT` match **exactly** what you passed into the S3 SDK `PutObjectCommand` configuration during generation.
+    location / {
+        proxy_cache s3_cache;
+        proxy_cache_valid 200 24h;
+        proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+        proxy_cache_lock on;
+
+        # Forward request to S3 bucket
+        proxy_pass https://sujankshrestha-bucket.s3.ap-south-1.amazonaws.com;
+        proxy_set_header Host sujankshrestha-bucket.s3.ap-south-1.amazonaws.com;
+        proxy_hide_header x-amz-id-2;
+        proxy_hide_header x-amz-request-id;
+        proxy_hide_header x-amz-meta-s3cmd-attrs;
+        proxy_hide_header Set-Cookie;
+        proxy_ignore_headers Set-Cookie Cache-Control;
+        
+        add_header X-Cache-Status $upstream_cache_status; # Hits display: HIT / MISS
+    }
+}
+```
+
+* **Pros:** Nginx performs caching in high-performance C. Offloads Node.js completely.
+* **Cons:** Harder to validate user authentication dynamically (requires sub-requests or Lua scripting).
+
+#### 2. CloudFront CDN + Origin Access Control (OAC) (The Standard Cloud Native Pattern)
+This is the recommended standard for enterprise AWS apps. 
+- S3 is configured to block all public access.
+- CloudFront has an **OAC (Origin Access Control)** credential configured.
+- S3 allows access **only** from the CloudFront Service Principal.
+- **Caching & DDoS protection** are handled by CloudFront at edge locations globally.
+
+#### 3. In-Memory Distributed Cache (Redis Cache)
+- Excellent for caching metadata (such as signed URLs themselves).
+- Storing entire image binaries in Redis is generally discouraged because Redis runs in memory (RAM), which is 10x–100x more expensive than SSD disk storage. If used, limit it to tiny micro-avatars or base64 previews.
+
+```

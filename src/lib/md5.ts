@@ -3,144 +3,159 @@
  * Used for S3 Content-MD5 payload integrity verification.
  */
 export function calculateMD5(buffer: ArrayBuffer): string {
-  // Convert ArrayBuffer to 32-bit words
-  const words = new Uint32Array(buffer.byteLength + 8 >> 2);
+  const n = buffer.byteLength;
+  const state = [1732584193, -271733879, -1732584194, 271733878];
   const view = new DataView(buffer);
-  for (let i = 0; i < buffer.byteLength; i++) {
-    words[i >> 2] |= view.getUint8(i) << ((i % 4) * 8);
-  }
-  words[buffer.byteLength >> 2] |= 0x80 << ((buffer.byteLength % 4) * 8);
-  words[words.length - 2] = buffer.byteLength * 8;
 
-  let a = 1732584193;
-  let b = -271733879;
-  let c = -1732584194;
-  let d = 271733878;
-
-  const S11 = 7, S12 = 12, S13 = 17, S14 = 22;
-  const S21 = 5, S22 = 9, S23 = 14, S24 = 20;
-  const S31 = 4, S32 = 11, S33 = 16, S34 = 23;
-  const S41 = 6, S42 = 10, S43 = 15, S44 = 21;
-
-  const F = (x: number, y: number, z: number) => (x & y) | (~x & z);
-  const G = (x: number, y: number, z: number) => (x & z) | (y & ~z);
-  const H = (x: number, y: number, z: number) => x ^ y ^ z;
-  const I = (x: number, y: number, z: number) => y ^ (x | ~z);
-
-  const rot = (x: number, n: number) => (x << n) | (x >>> (32 - n));
-
-  const FF = (a: number, b: number, c: number, d: number, x: number, s: number, ac: number) => {
-    a = (a + F(b, c, d) + x + ac) | 0;
-    return (rot(a, s) + b) | 0;
-  };
-  const GG = (a: number, b: number, c: number, d: number, x: number, s: number, ac: number) => {
-    a = (a + G(b, c, d) + x + ac) | 0;
-    return (rot(a, s) + b) | 0;
-  };
-  const HH = (a: number, b: number, c: number, d: number, x: number, s: number, ac: number) => {
-    a = (a + H(b, c, d) + x + ac) | 0;
-    return (rot(a, s) + b) | 0;
-  };
-  const II = (a: number, b: number, c: number, d: number, x: number, s: number, ac: number) => {
-    a = (a + I(b, c, d) + x + ac) | 0;
-    return (rot(a, s) + b) | 0;
-  };
-
-  for (let j = 0; j < words.length; j += 16) {
-    const aa = a, bb = b, cc = c, dd = d;
-
-    // Round 1
-    a = FF(a, b, c, d, words[j + 0], S11, -680876936);
-    d = FF(d, a, b, c, words[j + 1], S12, -389564586);
-    c = FF(c, d, a, b, words[j + 2], S13,  606105819);
-    b = FF(b, c, d, a, words[j + 3], S14, -1044525330);
-    a = FF(a, b, c, d, words[j + 4], S11, -176418897);
-    d = FF(d, a, b, c, words[j + 5], S12,  1200080426);
-    c = FF(c, d, a, b, words[j + 6], S13, -1473231341);
-    b = FF(b, c, d, a, words[j + 7], S14, -45705983);
-    a = FF(a, b, c, d, words[j + 8], S11,  1770035416);
-    d = FF(d, a, b, c, words[j + 9], S12, -1958414417);
-    c = FF(c, d, a, b, words[j + 10], S13, -42063);
-    b = FF(b, c, d, a, words[j + 11], S14, -1990404162);
-    a = FF(a, b, c, d, words[j + 12], S11,  1804603682);
-    d = FF(d, a, b, c, words[j + 13], S12, -40341101);
-    c = FF(c, d, a, b, words[j + 14], S13, -1502002290);
-    b = FF(b, c, d, a, words[j + 15], S14,  1236535329);
-
-    // Round 2
-    a = GG(a, b, c, d, words[j + 1], S21, -165796510);
-    d = GG(d, a, b, c, words[j + 6], S22, -1069501632);
-    c = GG(c, d, a, b, words[j + 11], S23,  643717713);
-    b = GG(b, c, d, a, words[j + 0], S24, -373897302);
-    a = GG(a, b, c, d, words[j + 5], S21, -701558691);
-    d = GG(d, a, b, c, words[j + 10], S22,  38016083);
-    c = GG(c, d, a, b, words[j + 15], S23, -660478335);
-    b = GG(b, c, d, a, words[j + 4], S24, -405537848);
-    a = GG(a, b, c, d, words[j + 9], S21,  568446438);
-    d = GG(d, a, b, c, words[j + 14], S22, -1019803690);
-    c = GG(c, d, a, b, words[j + 3], S23, -187363961);
-    b = GG(b, c, d, a, words[j + 8], S24,  1163531501);
-    a = GG(a, b, c, d, words[j + 13], S21, -1444681467);
-    d = GG(d, a, b, c, words[j + 2], S22, -51403784);
-    c = GG(c, d, a, b, words[j + 7], S23,  1735328473);
-    b = GG(b, c, d, a, words[j + 12], S24, -1926607734);
-
-    // Round 3
-    a = HH(a, b, c, d, words[j + 5], S31, -378558);
-    d = HH(d, a, b, c, words[j + 8], S32, -2022574463);
-    c = HH(c, d, a, b, words[j + 11], S33,  1839030562);
-    b = HH(b, c, d, a, words[j + 14], S34, -35309556);
-    a = HH(a, b, c, d, words[j + 1], S31, -1530992060);
-    d = HH(d, a, b, c, words[j + 4], S32,  1272893353);
-    c = HH(c, d, a, b, words[j + 7], S33, -155497632);
-    b = HH(b, c, d, a, words[j + 10], S34, -1094730640);
-    a = HH(a, b, c, d, words[j + 13], S31,  2448471);
-    d = HH(d, a, b, c, words[j + 0], S32, -225010);
-    c = HH(c, d, a, b, words[j + 3], S33, -1861084689);
-    b = HH(b, c, d, a, words[j + 6], S34,  2000421703);
-    a = HH(a, b, c, d, words[j + 9], S31, -22654302);
-    d = HH(d, a, b, c, words[j + 12], S32, -1349374187);
-    c = HH(c, d, a, b, words[j + 15], S33,  368270030);
-    b = HH(b, c, d, a, words[j + 2], S34, -361401604);
-
-    // Round 4
-    a = II(a, b, c, d, words[j + 0], S41, -217734784);
-    d = II(d, a, b, c, words[j + 7], S42,  1800603682);
-    c = II(c, d, a, b, words[j + 14], S43, -40207157);
-    b = II(b, c, d, a, words[j + 5], S44, -1930301635);
-    a = II(a, b, c, d, words[j + 12], S41,  91402224);
-    d = II(d, a, b, c, words[j + 3], S42, -165339024);
-    c = II(c, d, a, b, words[j + 10], S43, -1881740289);
-    b = II(b, c, d, a, words[j + 1], S44,  123565327);
-    a = II(a, b, c, d, words[j + 8], S41, -165501535);
-    d = II(d, a, b, c, words[j + 15], S42, -105450244);
-    c = II(c, d, a, b, words[j + 6], S43,  640034456);
-    b = II(b, c, d, a, words[j + 13], S44, -37533300);
-    a = II(a, b, c, d, words[j + 4], S41, -701520691);
-    d = II(d, a, b, c, words[j + 11], S42,  38003702);
-    c = II(c, d, a, b, words[j + 2], S43, -660478337);
-    b = II(b, c, d, a, words[j + 9], S44, -405537848);
-
-    a = (a + aa) | 0;
-    b = (b + bb) | 0;
-    c = (c + cc) | 0;
-    d = (d + dd) | 0;
+  function add32(x: number, y: number): number {
+    const lsw = (x & 0xffff) + (y & 0xffff);
+    const msw = (x >> 16) + (y >> 16) + (lsw >> 16);
+    return (msw << 16) | (lsw & 0xffff);
   }
 
-  // Convert state words to hex representation
-  const hex = [a, b, c, d].map((val) => {
-    const u32 = new Uint32Array([val])[0];
-    const bytes = [
-      u32 & 0xff,
-      (u32 >> 8) & 0xff,
-      (u32 >> 16) & 0xff,
-      (u32 >> 24) & 0xff,
-    ];
-    return bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
-  }).join("");
+  function cmn(q: number, a: number, b: number, x: number, s: number, t: number): number {
+    a = add32(add32(a, q), add32(x, t));
+    return add32((a << s) | (a >>> (32 - s)), b);
+  }
 
-  // Convert hex digest to a Base64 string
-  const rawBytes = hex.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) ?? [];
+  function ff(a: number, b: number, c: number, d: number, x: number, s: number, t: number): number {
+    return cmn((b & c) | ((~b) & d), a, b, x, s, t);
+  }
+
+  function gg(a: number, b: number, c: number, d: number, x: number, s: number, t: number): number {
+    return cmn((b & d) | (c & (~d)), a, b, x, s, t);
+  }
+
+  function hh(a: number, b: number, c: number, d: number, x: number, s: number, t: number): number {
+    return cmn(b ^ c ^ d, a, b, x, s, t);
+  }
+
+  function ii(a: number, b: number, c: number, d: number, x: number, s: number, t: number): number {
+    return cmn(c ^ (b | (~d)), a, b, x, s, t);
+  }
+
+  function md5cycle(x: number[], k: number[]) {
+    let a = x[0], b = x[1], c = x[2], d = x[3];
+
+    a = ff(a, b, c, d, k[0], 7, -680876936);
+    d = ff(d, a, b, c, k[1], 12, -389564586);
+    c = ff(c, d, a, b, k[2], 17,  606105819);
+    b = ff(b, c, d, a, k[3], 22, -1044525330);
+    a = ff(a, b, c, d, k[4], 7, -176418897);
+    d = ff(d, a, b, c, k[5], 12,  1200080426);
+    c = ff(c, d, a, b, k[6], 17, -1473231341);
+    b = ff(b, c, d, a, k[7], 22, -45705983);
+    a = ff(a, b, c, d, k[8], 7,  1770035416);
+    d = ff(d, a, b, c, k[9], 12, -1958414417);
+    c = ff(c, d, a, b, k[10], 17, -42063);
+    b = ff(b, c, d, a, k[11], 22, -1990404162);
+    a = ff(a, b, c, d, k[12], 7,  1804603682);
+    d = ff(d, a, b, c, k[13], 12, -40341101);
+    c = ff(c, d, a, b, k[14], 17, -1502002290);
+    b = ff(b, c, d, a, k[15], 22,  1236535329);
+
+    a = gg(a, b, c, d, k[1], 5, -165796510);
+    d = gg(d, a, b, c, k[6], 9, -1069501632);
+    c = gg(c, d, a, b, k[11], 14,  643717713);
+    b = gg(b, c, d, a, k[0], 20, -373897302);
+    a = gg(a, b, c, d, k[5], 5, -701558691);
+    d = gg(d, a, b, c, k[10], 9,  38016083);
+    c = gg(c, d, a, b, k[15], 14, -660478335);
+    b = gg(b, c, d, a, k[4], 20, -405537848);
+    a = gg(a, b, c, d, k[9], 5,  568446438);
+    d = gg(d, a, b, c, k[14], 9, -1019803690);
+    c = gg(c, d, a, b, k[3], 14, -187363961);
+    b = gg(b, c, d, a, k[8], 20,  1163531501);
+    a = gg(a, b, c, d, k[13], 5, -1444681467);
+    d = gg(d, a, b, c, k[2], 9, -51403784);
+    c = gg(c, d, a, b, k[7], 14,  1735328473);
+    b = gg(b, c, d, a, k[12], 20, -1926607734);
+
+    a = hh(a, b, c, d, k[5], 4, -378558);
+    d = hh(d, a, b, c, k[8], 11, -2022574463);
+    c = hh(c, d, a, b, k[11], 16,  1839030562);
+    b = hh(b, c, d, a, k[14], 23, -35309556);
+    a = hh(a, b, c, d, k[1], 4, -1530992060);
+    d = hh(d, a, b, c, k[4], 11,  1272893353);
+    c = hh(c, d, a, b, k[7], 16, -155497632);
+    b = hh(b, c, d, a, k[10], 23, -1094730640);
+    a = hh(a, b, c, d, k[13], 4,  681279174);
+    d = hh(d, a, b, c, k[0], 11, -358537222);
+    c = hh(c, d, a, b, k[3], 16, -722521979);
+    b = hh(b, c, d, a, k[6], 23,  76029189);
+    a = hh(a, b, c, d, k[9], 4, -640364487);
+    d = hh(d, a, b, c, k[12], 11, -421815835);
+    c = hh(c, d, a, b, k[15], 16,  530742520);
+    b = hh(b, c, d, a, k[2], 23, -995338651);
+
+    a = ii(a, b, c, d, k[0], 6, -198630844);
+    d = ii(d, a, b, c, k[7], 10,  1126891415);
+    c = ii(c, d, a, b, k[14], 15, -1416354905);
+    b = ii(b, c, d, a, k[5], 21, -57434055);
+    a = ii(a, b, c, d, k[12], 6,  1700485571);
+    d = ii(d, a, b, c, k[3], 10, -1894986606);
+    c = ii(c, d, a, b, k[10], 15, -1051523);
+    b = ii(b, c, d, a, k[1], 21, -2054922799);
+    a = ii(a, b, c, d, k[8], 6,  1873313359);
+    d = ii(d, a, b, c, k[15], 10, -30611744);
+    c = ii(c, d, a, b, k[6], 15, -1560198380);
+    b = ii(b, c, d, a, k[13], 21,  1309151649);
+    a = ii(a, b, c, d, k[4], 6, -145523070);
+    d = ii(d, a, b, c, k[11], 10, -1120210379);
+    c = ii(c, d, a, b, k[2], 15,  718787259);
+    b = ii(b, c, d, a, k[9], 21, -343485551);
+
+    x[0] = add32(a, x[0]);
+    x[1] = add32(b, x[1]);
+    x[2] = add32(c, x[2]);
+    x[3] = add32(d, x[3]);
+  }
+
+  function getBlock(offset: number): number[] {
+    const block = new Array<number>(16);
+    for (let i = 0; i < 16; i++) {
+      block[i] = view.getUint32(offset + i * 4, true);
+    }
+    return block;
+  }
+
+  let i = 0;
+  for (; i + 64 <= n; i += 64) {
+    md5cycle(state, getBlock(i));
+  }
+
+  const tail = new Array<number>(16).fill(0);
+  const remainingBytes = n - i;
+  const remainingView = new Uint8Array(buffer, i, remainingBytes);
+
+  for (let j = 0; j < remainingBytes; j++) {
+    tail[j >> 2] |= remainingView[j] << ((j % 4) * 8);
+  }
+
+  tail[remainingBytes >> 2] |= 0x80 << ((remainingBytes % 4) * 8);
+
+  if (remainingBytes > 55) {
+    md5cycle(state, tail);
+    tail.fill(0);
+  }
+
+  const bitLength = n * 8;
+  tail[14] = bitLength & 0xffffffff;
+  tail[15] = Math.floor(bitLength / 0x100000000);
+
+  md5cycle(state, tail);
+
+  const hex_chr = "0123456789abcdef".split("");
+  function rhex(num: number): string {
+    let s = "";
+    for (let j = 0; j < 4; j++) {
+      s += hex_chr[(num >> (j * 8 + 4)) & 0x0f] + hex_chr[(num >> (j * 8)) & 0x0f];
+    }
+    return s;
+  }
+
+  const hexDigest = state.map(rhex).join("");
+  const rawBytes = hexDigest.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) ?? [];
   const binaryString = String.fromCharCode(...rawBytes);
   return btoa(binaryString);
 }

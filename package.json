@@ -26,6 +26,8 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@aws-sdk/client-cloudwatch-logs": "^3.1070.0",
+    "@aws-sdk/client-lambda": "^3.1069.0",
     "@types/node": "^20.14.8",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",

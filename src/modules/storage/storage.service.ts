@@ -21,7 +21,7 @@ function getClient(): S3Client {
       region: env.AWS_REGION,
       requestChecksumCalculation: "WHEN_REQUIRED",
       credentials: {
-        accessKeyId:     env.AWS_ACCESS_KEY_ID,
+        accessKeyId: env.AWS_ACCESS_KEY_ID,
         secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
       },
     });
@@ -34,11 +34,11 @@ export const StorageService = {
     return getSignedUrl(
       getClient(),
       new PutObjectCommand({
-        Bucket:      getEnv().S3_BUCKET_NAME,
-        Key:         input.key,
+        Bucket: getEnv().S3_BUCKET_NAME,
+        Key: input.key,
         ContentType: input.contentType,
-        Tagging:     "cleanup=true",
-        ContentMD5:  input.contentMd5,
+        Tagging: "cleanup=true",
+        ContentMD5: input.contentMd5,
       }),
       {
         expiresIn: 60 * 5,
@@ -62,13 +62,13 @@ export const StorageService = {
       );
       return true;
     } catch (err: unknown) {
-      const name   = (err as { name?: string }).name  ?? "";
-      const code   = (err as { Code?: string }).Code  ?? "";
+      const name = (err as { name?: string }).name ?? "";
+      const code = (err as { Code?: string }).Code ?? "";
       const status = (err as { $metadata?: { httpStatusCode?: number } })
         ?.$metadata?.httpStatusCode;
-      if (["NotFound","NoSuchKey"].includes(name) ||
-          ["NotFound","NoSuchKey"].includes(code) ||
-          status === 404) return false;
+      if (["NotFound", "NoSuchKey"].includes(name) ||
+        ["NotFound", "NoSuchKey"].includes(code) ||
+        status === 404) return false;
       throw err;
     }
   },
@@ -77,7 +77,7 @@ export const StorageService = {
     await getClient().send(
       new DeleteObjectTaggingCommand({
         Bucket: getEnv().S3_BUCKET_NAME,
-        Key:    key,
+        Key: key,
       })
     );
   },
@@ -85,10 +85,10 @@ export const StorageService = {
   async initiateMultipartUpload(key: string, contentType: string): Promise<string> {
     const res = await getClient().send(
       new CreateMultipartUploadCommand({
-        Bucket:      getEnv().S3_BUCKET_NAME,
-        Key:         key,
+        Bucket: getEnv().S3_BUCKET_NAME,
+        Key: key,
         ContentType: contentType,
-        Tagging:     "cleanup=true",
+        Tagging: "cleanup=true",
       })
     );
     if (!res.UploadId) throw new Error("Failed to initiate S3 multipart upload.");
@@ -103,9 +103,9 @@ export const StorageService = {
     return getSignedUrl(
       getClient(),
       new UploadPartCommand({
-        Bucket:     getEnv().S3_BUCKET_NAME,
-        Key:        input.key,
-        UploadId:   input.uploadId,
+        Bucket: getEnv().S3_BUCKET_NAME,
+        Key: input.key,
+        UploadId: input.uploadId,
         PartNumber: input.partNumber,
       }),
       { expiresIn: 60 * 20 }
@@ -119,9 +119,9 @@ export const StorageService = {
   }): Promise<void> {
     await getClient().send(
       new CompleteMultipartUploadCommand({
-        Bucket:          getEnv().S3_BUCKET_NAME,
-        Key:             input.key,
-        UploadId:        input.uploadId,
+        Bucket: getEnv().S3_BUCKET_NAME,
+        Key: input.key,
+        UploadId: input.uploadId,
         MultipartUpload: { Parts: input.parts },
       })
     );
@@ -130,8 +130,8 @@ export const StorageService = {
   async abortMultipartUpload(input: { key: string; uploadId: string }): Promise<void> {
     await getClient().send(
       new AbortMultipartUploadCommand({
-        Bucket:   getEnv().S3_BUCKET_NAME,
-        Key:      input.key,
+        Bucket: getEnv().S3_BUCKET_NAME,
+        Key: input.key,
         UploadId: input.uploadId,
       })
     );
@@ -155,19 +155,19 @@ export const StorageService = {
         chunks.push(chunk);
       }
       return {
-        kind:        "ok" as const,
-        buffer:      Buffer.concat(chunks),
+        kind: "ok" as const,
+        buffer: Buffer.concat(chunks),
         contentType: res.ContentType ?? inferContentType(key),
-        etag:        res.ETag,
+        etag: res.ETag,
       };
     } catch (err: unknown) {
-      const name   = (err as { name?: string }).name  ?? "";
-      const code   = (err as { Code?: string }).Code  ?? "";
+      const name = (err as { name?: string }).name ?? "";
+      const code = (err as { Code?: string }).Code ?? "";
       const status = (err as { $metadata?: { httpStatusCode?: number } })
         ?.$metadata?.httpStatusCode;
-      if (["NotFound","NoSuchKey"].includes(name) ||
-          ["NotFound","NoSuchKey"].includes(code) ||
-          status === 404) return { kind: "not_found" as const };
+      if (["NotFound", "NoSuchKey"].includes(name) ||
+        ["NotFound", "NoSuchKey"].includes(code) ||
+        status === 404) return { kind: "not_found" as const };
       throw err;
     }
   },
@@ -175,7 +175,7 @@ export const StorageService = {
 
 function inferContentType(key: string): string {
   if (key.endsWith(".webp")) return "image/webp";
-  if (key.endsWith(".png"))  return "image/png";
-  if (key.endsWith(".gif"))  return "image/gif";
+  if (key.endsWith(".png")) return "image/png";
+  if (key.endsWith(".gif")) return "image/gif";
   return "image/jpeg";
 }

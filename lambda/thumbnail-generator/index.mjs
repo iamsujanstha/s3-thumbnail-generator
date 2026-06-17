@@ -79,7 +79,7 @@ export const handler = async (event) => {
       const sourceBuffer = await streamToBuffer(object.Body);
 
       // 2. Resize + convert with sharp
-      const thumbnail = await sharp(sourceBuffer, { failOn: "none" })
+      const thumbnail = await sharp(sourceBuffer, { failOn: "none", limitInputPixels: false })
         .rotate()                          // auto-rotate via EXIF
         .resize(THUMB_WIDTH, THUMB_HEIGHT, {
           fit: "cover",
