@@ -2,6 +2,7 @@ import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
+  DeleteObjectCommand,
   DeleteObjectTaggingCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -76,6 +77,15 @@ export const StorageService = {
   async removeCleanupTag(key: string): Promise<void> {
     await getClient().send(
       new DeleteObjectTaggingCommand({
+        Bucket: getEnv().S3_BUCKET_NAME,
+        Key: key,
+      })
+    );
+  },
+
+  async deleteObject(key: string): Promise<void> {
+    await getClient().send(
+      new DeleteObjectCommand({
         Bucket: getEnv().S3_BUCKET_NAME,
         Key: key,
       })

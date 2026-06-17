@@ -1,3 +1,9 @@
+<style>
+  code, pre, kbd, samp {
+    font-family: 'Fira Code', ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+  }
+</style>
+
 # S3 → Lambda Thumbnail Generator — Complete Setup Guide
 
 > Copy this folder into any project. Edit the CONFIG block in `index.mjs`. Follow every step in order.
@@ -371,25 +377,98 @@ Then remove `AmazonS3FullAccess` from the role if you added it — keep only the
 
 ---
 
-## Step 6 — Build the Lambda ZIP
+## <span style="color:#d946ef; background-color:#fdf2ff; padding: 6px 10px; border-radius: 6px; display: inline-block;">⚡ Step 6 — Building & Packaging the Lambda Function</span>
 
-Run in `lambda/thumbnail-generator/`:
+### 📂 Understanding the Lambda Files & Project Structure
 
+The standalone thumbnail generator lives inside the `lambda/thumbnail-generator/` directory. It requires three critical files/directories:
+
+1. **`index.mjs` (The Code Handler)**: The entry point written as an ES Module (`.mjs`). It exports the `handler` function that AWS S3 invokes. It fetches the uploaded raw image, utilizes the `sharp` library to resize and compress it to a `150x150` WebP image, and uploads it back to S3.
+2. **`package.json` (Configuration)**: Defines the package dependencies (specifically `sharp`) and configuration metadata.
+3. **`node_modules/` (Dependencies)**: The folders containing the `sharp` library and its nested dependencies.
+
+---
+
+### 🖥️ Native Binary Compatibility (Why normal `npm install` will crash)
+
+The `sharp` image processing library relies on high-performance native C++ bindings. AWS Lambda executes code in a containerized **Linux environment** (Amazon Linux 2 or AL2023). 
+
+If you run a simple `npm install` on a non-Linux machine (like macOS or Windows), npm installs the native binary compiled for your local operating system (e.g. Darwin for Mac, Win32 for Windows). If you zip and upload this package, the Lambda will crash with:
+`Error: Could not load the "sharp" module using the linux-x64 runtime`
+
+#### ⚙️ Cross-Platform Installation Command:
+To install the correct Linux-compatible binaries, we must force npm to download the C++ bindings matching AWS Lambda's OS and CPU specifications. 
+
+Run this command inside `lambda/thumbnail-generator/`:
 ```bash
 # Step 1 — install sharp compiled for Linux x64 (Lambda runtime)
 npm install --os=linux --cpu=x64 --libc=glibc sharp
 
 # Step 2 — install all other deps
 npm install
+```
+*Note: The `.npmrc` file in this directory already pins `os=linux cpu=x64 libc=glibc`, so running a plain `npm install` in future will also safely fetch the correct binaries.*
 
+---
+
+### 📦 The Packaging Process: How, Why, and Where to Zip
+
+AWS Lambda requires all code and dependency folders to be zipped together for deployment. 
+
+#### 1. Why do we package it?
+AWS Lambda runs isolated serverless instances. It cannot download external dependencies at runtime. Therefore, all code (`index.mjs`) and native dependencies (`node_modules`) must be bundled together in a single archive.
+
+#### 2. Where do we place the ZIP?
+We output the ZIP file to the **parent directory** (`../thumbnail-generator.zip`). Putting the ZIP file outside the current working directory ensures we do not include the archive recursively inside itself, which would cause packaging bloat.
+
+#### 3. How do we execute the package?
+Run the following build command:
+```bash
 # Step 3 — create the deployment ZIP
 zip -r ../thumbnail-generator.zip index.mjs node_modules package.json
 ```
+*(The `-r` flag recursively zips the directories).*
 
-The `.npmrc` file here already pins `os=linux cpu=x64 libc=glibc`, so running plain `npm install` in future will also get the correct binary.
+---
 
-> **macOS users** — never skip the `--os=linux --cpu=x64` flag for sharp. macOS installs the darwin binary which crashes Lambda instantly with:
-> `Error: Could not load the "sharp" module using the linux-x64 runtime`
+### 🗺️ Lambda Packaging & Deployment Pipeline
+
+```mermaid
+graph TD
+    %% Define Styles
+    classDef client fill:#eff6ff,stroke:#3b82f6,stroke-width:2px,color:#1e3a8a;
+    classDef process fill:#faf5ff,stroke:#d946ef,stroke-width:2px,color:#581c87;
+    classDef aws fill:#ecfdf5,stroke:#10b981,stroke-width:2px,color:#064e3b;
+
+    subgraph Local ["1. Local Development (Your Machine)"]
+        Files["Develop Files:<br/>• index.mjs<br/>• package.json"]:::client
+        NPMRC["Local .npmrc Configuration<br/>(Pins OS, CPU, LibC for S3 Lambda)"]:::client
+    end
+
+    subgraph Install ["2. Compatibility Resolution"]
+        Command["npm install --os=linux --cpu=x64 --libc=glibc sharp"]:::process
+        NodeModules["node_modules/<br/>(Linux x64 C++ bindings compiled)"]:::process
+    end
+
+    subgraph Package ["3. ZIP Archival"]
+        ZipCmd["zip -r ../thumbnail-generator.zip index.mjs node_modules package.json"]:::process
+        ZipFile["thumbnail-generator.zip<br/>(Stored in parent directory)"]:::process
+    end
+
+    subgraph Deploy ["4. AWS Lambda Execution"]
+        LambdaUpload["Upload ZIP to AWS Console/CLI"]:::aws
+        HandlerRun["index.handler runs on AWS Linux Container"]:::aws
+    end
+
+    %% Connections
+    Files --> NPMRC
+    NPMRC --> Command
+    Command --> NodeModules
+    NodeModules --> ZipCmd
+    ZipCmd --> ZipFile
+    ZipFile --> LambdaUpload
+    LambdaUpload --> HandlerRun
+```
 
 ---
 

@@ -1,3 +1,9 @@
+<style>
+  code, pre, kbd, samp {
+    font-family: 'Fira Code', ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+  }
+</style>
+
 # Thumbnail Generator Lambda
 
 Configure this Lambda with an S3 event notification:

@@ -16,6 +16,8 @@ We will extract the pattern from your current Next.js application and port it in
 
 Instead of uploading files directly to your application server (which blocks threads and bloats memory), the client fetches a cryptographically signed write URL from NestJS, uploads the binary file directly to S3, and then registers the file key in the database.
 
+To optimize perceived performance, the frontend triggers the **upload immediately upon file selection**. While the user is busy filling out the text input fields (such as Full Name, Job Title, and Company), the upload happens in the background.
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -24,24 +26,40 @@ sequenceDiagram
     participant S3 as AWS S3 Bucket
     participant DB as MongoDB / PostgreSQL
 
-    Note over Client, Nest: Phase 1: Authentication & Signed URL Request
+    Note over Client, S3: TRIGGER 1: User Selects File (Runs in Background)
+    
     Client->>Nest: POST /s3/presign (filename, contentType, contentMd5)
     Note over Nest: 1. Validate payload via DTOs<br/>2. Generate safe UUID Key (e.g., uploads/raw/uuid-file.jpg)<br/>3. Sign S3 PutObjectCommand with 'cleanup=true' Tag
     Nest->>S3: Call getSignedUrl(PutObjectCommand)
     S3-->>Nest: Return Signed cryptographic URL
     Nest-->>Client: Return { uploadUrl, imageKey }
 
-    Note over Client, S3: Phase 2: Direct Binary Upload
     Client->>S3: PUT binary stream to uploadUrl (Headers: Content-Type, Content-MD5)
     S3-->>Client: HTTP 200 OK (Upload Success)
+    Note over Client: Form Submit Button Enabled<br/>(Image key saved in state)
 
-    Note over Client, DB: Phase 3: Entity Creation & Tag Eviction
+    Note over Client, DB: TRIGGER 2: User Clicks Submit
+
     Client->>Nest: POST /profiles (fullName, jobTitle, imageKey)
     Nest->>DB: Save Profile Document (with imageKey)
     DB-->>Nest: Profile Saved
     Nest->>S3: DeleteObjectTaggingCommand(imageKey) (Peels off 'cleanup=true')
     Nest-->>Client: HTTP 201 Created (Success)
 ```
+
+### 🌟 Key Benefits of the "Instant S3 Upload" Design Pattern
+
+1. **Improved Perceived Performance (Zero Wait Time)**:
+   By the time the user completes typing their details (e.g., Full Name, Job Title) and clicks "Create Profile", the binary upload to S3 has already finished in the background. The final form submission only transfers a lightweight JSON payload containing the S3 key, which executes near-instantaneously.
+
+2. **Early Error Detection & Better UX**:
+   If S3 uploads fail (due to network drops, CORS issues, or file validation problems), users receive immediate feedback right at the file picker step. They don't have to fill out a long form only to find out at the very end that the file upload failed.
+
+3. **Zero Orphan Files (via Tagging & S3 Lifecycle)**:
+   Since files are uploaded *before* the form is submitted, a user might abort the creation by closing the tab or clearing the file. To prevent S3 bucket bloat, files are uploaded with a temporary `cleanup=true` tag. An S3 lifecycle policy automatically deletes tagged objects after 24 hours. The tag is only removed (evicted) upon a successful form submit and database save.
+
+4. **Bypasses Frontend/Backend Server Bottlenecks**:
+   The binary payload streams directly from the client's browser to S3. Neither the Next.js/NestJS server processes nor memory limits are strained by uploading or parsing large multi-megabyte files.
 
 ---
 
@@ -364,6 +382,8 @@ export class StorageModule {}
 
 In standard React, there is no built-in `next/image` proxy engine. The React SPA must handle MD5 calculation natively or via libraries, fetch the URL from NestJS, upload directly, and complete the save.
 
+To implement the **Instant S3 Upload** pattern, we separate the image upload (triggered on file selection) from the profile registration (triggered on form submission).
+
 ### Client-Side MD5 Calculation Hook
 To calculate the MD5 hash of files in React without bloating RAM, use `spark-md5` to hash the file block-by-block.
 
@@ -375,12 +395,39 @@ npm install --save-dev @types/spark-md5
 
 ```typescript
 // src/hooks/useProfileUpload.ts
-import { useState } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import SparkMD5 from 'spark-md5';
 
 export function useProfileUpload() {
+  const [file, setFile] = useState<File | null>(null);
+  const [uploadedKey, setUploadedKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const previewUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
+
+  const uploadedKeyRef = useRef<string | null>(null);
+
+  // Sync ref with uploadedKey state
+  useEffect(() => {
+    uploadedKeyRef.current = uploadedKey;
+  }, [uploadedKey]);
+
+  // Clean up S3 object on unmount if form was not submitted
+  useEffect(() => {
+    return () => {
+      if (uploadedKeyRef.current) {
+        fetch('/api/s3/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: uploadedKeyRef.current }),
+        }).catch((err) => {
+          console.warn('[useProfileUpload] Unmount cleanup failed:', err);
+        });
+      }
+    };
+  }, []);
 
   // Helper function to read file blocks and generate MD5 hash
   const calculateMd5 = (file: File): Promise<string> => {
@@ -417,21 +464,26 @@ export function useProfileUpload() {
     });
   };
 
-  const uploadFile = async (file: File, profileData: { fullName: string; jobTitle: string }) => {
-    setLoading(true);
+  // 1. Upload file immediately to S3 on selection (Trigger 1)
+  const handleFileChange = async (selectedFile: File | undefined) => {
     setError(null);
+    setUploadedKey(null);
+    if (!selectedFile) return;
+
+    setFile(selectedFile);
+    setLoading(true);
 
     try {
-      // 1. Calculate File Checksum
-      const fileMd5 = await calculateMd5(file);
+      // Calculate File Checksum
+      const fileMd5 = await calculateMd5(selectedFile);
 
-      // 2. Fetch Presigned URL from NestJS API
+      // Fetch Presigned URL from NestJS API
       const response = await fetch('/api/s3/presign', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          filename: file.name,
-          contentType: file.type,
+          filename: selectedFile.name,
+          contentType: selectedFile.type,
           contentMd5: fileMd5,
         }),
       });
@@ -439,41 +491,60 @@ export function useProfileUpload() {
       if (!response.ok) throw new Error('Failed to fetch presigned URL.');
       const { uploadUrl, imageKey } = await response.json();
 
-      // 3. PUT binary data directly to Amazon S3
-      // Custom headers signed by the server (Content-Type & Content-MD5) MUST be included
+      // PUT binary data directly to Amazon S3
       const s3Response = await fetch(uploadUrl, {
         method: 'PUT',
         headers: {
-          'Content-Type': file.type,
-          'Content-MD5': fileMd5, // AWS will verify MD5 integrity match
+          'Content-Type': selectedFile.type,
+          'Content-MD5': fileMd5,
         },
-        body: file,
+        body: selectedFile,
       });
 
       if (!s3Response.ok) throw new Error('S3 Direct Upload Failed.');
 
-      // 4. Register Profile & Metadata with backend
+      setUploadedKey(imageKey);
+    } catch (err: any) {
+      setError(err.message || 'Image upload failed.');
+      setFile(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 2. Submit form and save profile on database (Trigger 2 - cleans tags)
+  const submitProfile = async (profileData: { fullName: string; jobTitle: string }) => {
+    if (!uploadedKey) {
+      setError('Please select an image and wait for the upload to complete.');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+
+    try {
       const dbResponse = await fetch('/api/profiles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...profileData,
-          imageKey: imageKey, // File path key registered in database
+          imageKey: uploadedKey,
         }),
       });
 
       if (!dbResponse.ok) throw new Error('Failed to register profile data.');
 
-      setLoading(false);
+      setFile(null);
+      setUploadedKey(null);
       return await dbResponse.json();
     } catch (err: any) {
-      setError(err.message || 'Something went wrong.');
-      setLoading(false);
+      setError(err.message || 'Failed to save profile.');
       throw err;
+    } finally {
+      setSaving(false);
     }
   };
 
-  return { uploadFile, loading, error };
+  return { handleFileChange, submitProfile, file, previewUrl, uploadedKey, loading, saving, error };
 }
 ```
 
@@ -482,6 +553,22 @@ export function useProfileUpload() {
 ## <span style="color:#853b90; background-color:#fae8ff; padding: 4px 8px; border-radius: 4px; display: inline-block;">5. S3 Client SDK Commands Guide</span>
 
 When writing a backend in NestJS, you interact with AWS S3 using the modular **AWS SDK v3**. Below is a reference of the core commands, explaining when and how to use them with short, concise code examples.
+
+---
+
+### 📊 Comparative Analysis: `DeleteObjectCommand` vs `DeleteObjectTaggingCommand`
+
+It is common to confuse these two commands, but they serve completely different purposes. Here is a side-by-side comparison:
+
+| Feature | 🗑️ `DeleteObjectCommand` | 🏷️ `DeleteObjectTaggingCommand` |
+| :--- | :--- | :--- |
+| **Target** | The **entire S3 object** (binary data and key). | The **metadata tags** (key-value pairs) attached to the object. |
+| **Object Survival** | **Deleted.** The file is permanently removed from S3. | **Preserved.** The file remains in S3 exactly as it was. |
+| **Subsequent GET Request** | Returns `404 Not Found` or `403 Forbidden`. | Returns `200 OK` (file is still fully accessible). |
+| **S3 Storage Size** | Reduced to 0 bytes (freeing storage). | Stays the same (only tags are cleared). |
+| **When to Use** | • User deletes their account / profile.<br>• User uploads a new avatar to replace the old one.<br>• Frontend overrides/clears a temporary upload. | • Form submitted successfully (stripping `cleanup=true`).<br>• Marking a workflow step complete (e.g., encoding finished).<br>• Rescuing files from automated S3 lifecycle sweeps. |
+
+---
 
 ### 1. `PutObjectCommand`
 * **When to use:** Used to upload files, text strings, or buffers directly from the backend server to S3 (bypassing client-side presigning). Recommended for saving system configs, server-rendered reports, or small JSON state payloads.
@@ -633,11 +720,36 @@ If you get `CORS error` in the browser console when calling S3 PUT:
 This occurs if the client fails to provide the exact header values that were signed during URL generation:
 - **Solution:** If you sign `Content-MD5` and `Content-Type` on the backend, the React client **must** pass those exact same headers during the S3 `PUT` fetch call. S3 calculates hashes matching these parameters; any mismatch results in a signature rejection.
 
-### 3. S3 Lifecycle Rule for Cleanups
-To clean up abandoned uploads (e.g. user selects file, S3 upload succeeds, but user closes browser tab before submitting profile form):
-1. Configure an S3 Lifecycle Rule targeting the `uploads/raw/` prefix.
-2. Select **Delete objects with specific tags**.
-3. Set filter tag: `cleanup=true`.
-4. Configure rule to expire/delete matching objects after **1 day**.
+### 3. Best Production Practices for Orphaned Uploads (File Overrides & Tab Closures)
+Because files are uploaded instantly upon selection to S3 to optimize performance, there are two primary waste scenarios:
+1. **Tab Closures / Abandonment:** The user selects an image, the image is uploaded to S3, but they close the tab or cancel before saving the form.
+2. **File Overrides:** The user uploads an image, changes their mind, and selects another image. The first image is now orphaned in S3.
 
-When a profile is successfully saved to MongoDB/PostgreSQL, the NestJS controller calls `StorageService.removeCleanupTag(imageKey)`. This peels the `cleanup=true` tag off the object, saving the file from automatic deletion.
+To prevent bucket bloat, production systems implement a **3-Tier Cleanup Strategy**:
+
+#### Tier 1: S3 Object Tagging + Lifecycle Rules (The Fail-Safe Net)
+- **Mechanism:** Generate presigned URLs with the object tag `cleanup=true` automatically attached. Configure an **S3 Lifecycle Rule** on the bucket targeting the prefix `uploads/raw/` that deletes objects with the `cleanup=true` tag after **1 day**. 
+- **Action:** When the database save is successful, call `DeleteObjectTaggingCommand` from your backend to remove the `cleanup=true` tag, saving the file from automatic deletion. This handles tab closures and app crashes.
+
+#### Tier 2: Client-Initiated Immediate Deletion (Immediate Reclamation)
+- **Mechanism:** In your React/Next.js hook, track the previously uploaded key. If the user selects a new image or clears the current selection, trigger a secure API call (e.g., `POST /api/s3/delete`) sending the old S3 key. The backend validates and immediately calls `DeleteObjectCommand` on S3 to delete the abandoned image, freeing space instantly.
+
+#### Tier 3: Expiration for Incomplete Multipart Uploads
+- **Mechanism:** For large files, if a multipart upload starts but gets aborted or fails mid-way, S3 retains the uploaded chunks, costing storage. Configure an S3 Lifecycle Rule on the bucket to **Abort incomplete multipart uploads** after **7 days** to clean up orphaned chunks.
+
+---
+
+### ⚖️ Architectural Choice: Tagging-Based Lifecycle vs. Immediate API Deletion
+
+When designing S3 cleanups, developers often ask: *Why not just delete files immediately from the frontend when a change occurs? Is tagging really better?*
+
+The answer is: **Yes, the Tagging-Based S3 Lifecycle is the mandatory foundation, while Immediate API Deletion is a best-effort optimization.**
+
+| Dimension | 🏷️ Tagging + S3 Lifecycle (Tier 1) | 🗑️ Client-Side Delete API (Tier 2) |
+| :--- | :--- | :--- |
+| **Reliability** | **100% Fail-Safe.** Executed server-side by AWS, completely independent of the client's state or connection. | **Best Effort.** Fails if the user closes the browser tab, their battery dies, or they lose connection before the API executes. |
+| **De-allocation Speed** | **Delayed (24 hours).** Objects remain in the S3 bucket for 1 day before expiration. | **Instant.** Files are deleted from the S3 bucket in milliseconds. |
+| **Primary Purpose** | **The Safety Net.** Automatically cleans up abandoned uploads from closed tabs, browser crashes, or lost connections. | **The Optimizer.** Minimizes storage overhead during active editing sessions (user changes selected file multiple times). |
+
+#### Conclusion:
+You **cannot** rely solely on client-side delete APIs because client sessions are highly fragile (tabs are closed, networks disconnect). Therefore, **Tagging + S3 Lifecycle Rules must be configured first** as the fail-safe boundary. Once active, the **Client-Side Delete API is layered on top** as an immediate storage optimization.

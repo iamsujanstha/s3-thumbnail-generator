@@ -51,3 +51,8 @@ export const completeMultipartSchema = z.object({
 
 export type InitiateMultipartDto = z.infer<typeof initiateMultipartSchema>;
 export type CompleteMultipartDto = z.infer<typeof completeMultipartSchema>;
+
+export const deleteTempFileSchema = z.object({
+  key: z.string().startsWith("uploads/raw/").max(512),
+});
+export type DeleteTempFileDto = z.infer<typeof deleteTempFileSchema>;

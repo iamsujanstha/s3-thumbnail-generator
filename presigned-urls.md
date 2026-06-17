@@ -1,6 +1,6 @@
 <style>
   code, pre, kbd, samp {
-    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+    font-family: 'Fira Code', ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
   }
 </style>
 
@@ -124,34 +124,52 @@ This data is signed using our private `AWS_SECRET_ACCESS_KEY`. When the client h
 - We generate a secure `UUID` on the server: `uploads/raw/<uuid>-<sanitized_filename>`.
 - The client cannot inject arbitrary S3 keys because S3 rejects the upload if the path does not exactly match the key signed in the URL.
 
-### <span style="color:#d97706">Q5: What is the "Auto-Delete / Tag Cleanup" pattern, and why do we need it?</span>
+### <span style="color:#d97706">Q5: What is the "Auto-Delete / Tag Cleanup" pattern, and how does it handle tab closures and file overrides?</span>
 
-**The Problem: Orphaned Uploads**
-If a user selects an image, the client requests a presigned URL, and S3 successfully receives the file. However, if the user closes their browser tab or cancels before clicking "Submit", the database profile is never created. The image file remains orphaned in S3 forever, costing money.
+**The Problem: Orphaned & Abandoned Uploads**
+Because we upload files instantly on selection to optimize performance, there are two primary waste scenarios:
+1. **Tab Closure / Abandonment:** The user selects an image (triggering S3 upload) but closes the tab or browser before submitting the form.
+2. **File Overrides:** The user uploads a file, decides they don't like it, and selects a different file. The first file remains in S3 but is no longer linked to anything.
 
-**The Solution:**
+**The Solution: A 3-Tier Production Cleanup Strategy**
+
+To prevent S3 bucket bloat and save costs, production architectures implement a tiered approach:
+
 ```mermaid
 stateDiagram-v2
-    [*] --> UploadRequested : Client calls /s3/presign
-    UploadRequested --> S3Uploaded : Client PUTs file with tag cleanup=true
+    [*] --> FileSelected : User selects image in UI
+    FileSelected --> S3Uploaded : Instant PUT upload with 'cleanup=true' Tag
     
     state S3Uploaded {
-        [*] --> WaitingForDatabase
+        [*] --> WaitingForSubmit : Image key stored in state
+        WaitingForSubmit --> FileOverridden : User selects a new file
+        FileOverridden --> S3Uploaded : Upload new file, queue old key
+        FileOverridden --> ImmediateDelete : Frontend triggers secure DELETE for old key
+        ImmediateDelete --> [*] : Deleted from S3 immediately
     }
     
-    WaitingForDatabase --> ProfileSaved : Client POSTs /api/profiles
-    ProfileSaved --> TagRemoved : Backend calls removeCleanupTag()
-    TagRemoved --> SafeStorage : File is kept permanently (No cleanup)
+    WaitingForSubmit --> FormSubmitted : User clicks "Submit"
+    FormSubmitted --> DBRegistered : Profile saved in DB
+    DBRegistered --> TagRemoved : Backend calls removeCleanupTag()
+    TagRemoved --> PermanentStorage : File preserved permanently
     
-    WaitingForDatabase --> Abandoned : User closes tab / form is not submitted
-    Abandoned --> LifecycleTriggered : 24 hours pass
-    LifecycleTriggered --> Deleted : S3 Lifecycle Rule deletes object automatically
-    Deleted --> [*]
+    WaitingForSubmit --> TabClosed : User closes tab or abandons form
+    TabClosed --> LifecycleTriggered : 24 hours pass
+    LifecycleTriggered --> S3AutoDelete : S3 Lifecycle Rule deletes tagged object
+    S3AutoDelete --> [*]
 ```
 
-1. **Tag During Signing:** S3 pre-signed URLs are created with a tag `cleanup=true` attached.
-2. **Peel Off Tag on Success:** When the profile is successfully saved to the database, the backend calls `DeleteObjectTaggingCommand` to remove the `cleanup=true` tag from the S3 object.
-3. **Automatic Cleanup:** An S3 Lifecycle Rule is configured on the bucket to automatically delete any object in `uploads/raw/` that still carries the `cleanup=true` tag after 24 hours.
+#### Tier 1: S3 Object Tagging + Lifecycle Rules (The Fail-Safe Net)
+- **Why:** Covers tab closures, network disconnections, app crashes, and abandoned forms.
+- **How:** During presigned URL generation, S3 objects are automatically tagged with `cleanup=true`. An S3 Lifecycle Policy is set to automatically delete any object in `uploads/raw/` with `cleanup=true` after **24 hours**. When the form is submitted, the backend calls `DeleteObjectTaggingCommand` to remove the tag, saving it from deletion.
+
+#### Tier 2: Client-Initiated Immediate Deletion (The Immediate Cleanup)
+- **Why:** Covers the file override scenario (selecting a new image or clearing the selection).
+- **How:** If `uploadedKey` is not null and the user uploads a new file or clears the input, the frontend makes an immediate HTTP request to a secure backend endpoint `/api/s3/delete` with the old key. The backend validates the user and key, then calls `DeleteObjectCommand` on S3 to remove the abandoned file immediately, avoiding waiting 24 hours.
+
+#### Tier 3: Incomplete Multipart Upload Expiration
+- **Why:** Covers aborted or failed large uploads where chunk uploads stopped halfway.
+- **How:** S3 buckets are configured with a Lifecycle Rule to "Abort incomplete multipart uploads" after **7 days**, which automatically garbage-collects temporary chunk uploads that were never completed.
 
 ### <span style="color:#d97706">Q6: What are the alternatives to calculating MD5 client-side?</span>
 

@@ -53,6 +53,7 @@ export function ProfileForm() {
     selectFile, clearFile, handleSubmit,
     setIsDragging,
     uploadProgress,
+    uploadedKey,
   } = useProfileUpload();
 
   /* Revoke object URL on unmount / file change */
@@ -219,7 +220,7 @@ export function ProfileForm() {
             {/* ── Submit ────────────────────────────────────────── */}
             <Button
               className="w-full"
-              disabled={isBusy}
+              disabled={isBusy || (!!file && !uploadedKey)}
               type="submit"
               aria-label={isBusy ? STEP_LABELS[step] : "Create profile"}
             >

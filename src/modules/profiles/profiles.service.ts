@@ -128,4 +128,8 @@ export const ProfilesService = {
       parts:    data.parts,
     });
   },
+
+  async deleteTempFile(key: string) {
+    await StorageService.deleteObject(key);
+  },
 };

@@ -2,7 +2,7 @@
 
 import { type FormEvent, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { calculateMD5 } from "@/lib/md5";
+import { useS3Upload, type S3UploadStep } from "@/shared/useS3Upload";
 
 export type UploadStep =
   | "idle"
@@ -16,9 +16,6 @@ export type ProfileFormState = {
   jobTitle: string;
   company:  string;
 };
-
-const MAX_FILE_SIZE = 200 * 1024 * 1024;
-const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 export const STEP_LABELS: Record<UploadStep, string> = {
   idle:       "Ready",
@@ -37,16 +34,35 @@ export function useProfileUpload() {
     jobTitle: "",
     company:  "",
   });
-  const [file, setFile]             = useState<File | null>(null);
-  const [step, setStep]             = useState<UploadStep>("idle");
-  const [error, setError]           = useState<string | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<{ uploaded: number; total: number; percent: number } | null>(null);
 
-  const previewUrl = useMemo(
-    () => (file ? URL.createObjectURL(file) : null),
-    [file]
-  );
+  const {
+    file,
+    setFile,
+    uploadedKey,
+    setUploadedKey,
+    step: s3Step,
+    setStep: setS3Step,
+    error: s3Error,
+    setError: setS3Error,
+    uploadProgress,
+    setUploadProgress,
+    previewUrl,
+    selectFile: s3SelectFile,
+    clearFile: s3ClearFile,
+  } = useS3Upload();
+
+  const [formStep, setFormStep] = useState<UploadStep>("idle");
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Coordinate the visual step
+  const step = useMemo<UploadStep>(() => {
+    if (formStep !== "idle") return formStep;
+    return s3Step as UploadStep;
+  }, [formStep, s3Step]);
+
+  // Combine error states
+  const error = formError || s3Error;
 
   const isBusy =
     step === "presigning" || step === "uploading" || step === "saving";
@@ -56,184 +72,39 @@ export function useProfileUpload() {
   }
 
   function selectFile(candidate: File | undefined) {
-    setError(null);
-    if (!candidate) return;
-    if (!ALLOWED_TYPES.has(candidate.type)) {
-      setError("Please upload a JPG, PNG, or WebP image.");
-      return;
-    }
-    if (candidate.size > MAX_FILE_SIZE) {
-      setError("Image must be 5 MB or smaller.");
-      return;
-    }
-    setFile(candidate);
-    setStep("idle");
+    setFormStep("idle");
+    setFormError(null);
+    s3SelectFile(candidate);
   }
 
   function clearFile() {
-    setFile(null);
+    setFormStep("idle");
+    setFormError(null);
+    s3ClearFile();
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    setError(null);
+    setFormError(null);
 
     if (!file) {
-      setError("Add a profile image before creating the profile.");
+      setFormError("Add a profile image before creating the profile.");
+      return;
+    }
+
+    if (!uploadedKey) {
+      setFormError("Please wait for the image upload to complete.");
       return;
     }
 
     try {
-      setUploadProgress(null);
-      let imageKey: string;
-      const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
-      const useMultipart = file.size > CHUNK_SIZE;
-
-      if (useMultipart) {
-        /* 1 — Initiate Multipart Upload */
-        setStep("presigning");
-        const initRes = await fetch("/api/s3/multipart/init", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            filename:    file.name,
-            contentType: file.type,
-            size:        file.size,
-          }),
-        });
-        if (!initRes.ok)
-          throw new Error("Could not prepare the multipart upload. Try again.");
-        
-        const { uploadId, key, parts } = (await initRes.json()) as {
-          uploadId: string;
-          key:      string;
-          parts:    { partNumber: number; uploadUrl: string }[];
-        };
-        imageKey = key;
-
-        // Initialize progress for multipart upload
-        setUploadProgress({ uploaded: 0, total: parts.length, percent: 0 });
-
-        /* 2 — Upload chunks concurrently */
-        setStep("uploading");
-        
-        // Limit concurrency to 3 parallel chunk uploads
-        const uploadQueue = [...parts];
-        const completedParts: { PartNumber: number; ETag: string }[] = [];
-        const concurrencyLimit = 3;
-
-        const uploadWorker = async () => {
-          while (uploadQueue.length > 0) {
-            const part = uploadQueue.shift();
-            if (!part) break;
-
-            const start = (part.partNumber - 1) * CHUNK_SIZE;
-            const end = Math.min(start + CHUNK_SIZE, file.size);
-            const chunk = file.slice(start, end);
-
-            const uploadRes = await fetch(part.uploadUrl, {
-              method: "PUT",
-              body:   chunk,
-            });
-
-            if (!uploadRes.ok) {
-              throw new Error(`Upload of part ${part.partNumber} failed.`);
-            }
-
-            const etag = uploadRes.headers.get("ETag");
-            if (!etag) {
-              throw new Error(`Missing ETag header for part ${part.partNumber}.`);
-            }
-
-            completedParts.push({
-              PartNumber: part.partNumber,
-              ETag:       etag.replace(/"/g, ""), // strip surrounding quotes if present
-            });
-
-            // Update progress after chunk completion
-            const currentUploaded = completedParts.length;
-            setUploadProgress({
-              uploaded: currentUploaded,
-              total:    parts.length,
-              percent:  Math.round((currentUploaded / parts.length) * 100),
-            });
-          }
-        };
-
-        // Spawn workers
-        const workers = Array.from({ length: concurrencyLimit }, () => uploadWorker());
-        await Promise.all(workers);
-
-        // Sort parts by part number
-        completedParts.sort((a, b) => a.PartNumber - b.PartNumber);
-
-        /* 3 — Complete Multipart Upload */
-        setStep("saving");
-        const completeRes = await fetch("/api/s3/multipart/complete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            uploadId,
-            key:  imageKey,
-            parts: completedParts,
-          }),
-        });
-        if (!completeRes.ok) {
-          throw new Error("Could not finalize S3 multipart upload.");
-        }
-      } else {
-        /* 1 — Presign (Standard PUT) */
-        setStep("presigning");
-
-        // Calculate MD5 of file to ensure payload integrity
-        const arrayBuffer = await file.arrayBuffer();
-        const contentMd5 = calculateMD5(arrayBuffer);
-
-        const presignRes = await fetch("/api/s3/presign", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            filename:    file.name,
-            contentType: file.type,
-            size:        file.size,
-            contentMd5,
-          }),
-        });
-        if (!presignRes.ok)
-          throw new Error("Could not prepare the upload. Try again.");
-        const { uploadUrl, imageKey: key } = (await presignRes.json()) as {
-          uploadUrl: string;
-          imageKey:  string;
-        };
-        imageKey = key;
-
-        /* 2 — Upload to S3 (Standard PUT) */
-        setStep("uploading");
-        const uploadRes = await fetch(uploadUrl, {
-          method:  "PUT",
-          headers: {
-            "Content-Type":  file.type,
-            "Content-MD5":   contentMd5,
-          },
-          body:    file,
-        });
-        if (!uploadRes.ok) {
-          const s3Err = await uploadRes.text().catch(() => "");
-          throw new Error(
-            `Image upload failed (${uploadRes.status})${
-              s3Err ? `: ${s3Err.slice(0, 200)}` : "."
-            }`
-          );
-        }
-      }
-
       /* 3 — Save profile */
-      setStep("saving");
+      setFormStep("saving");
       const profileRes = await fetch("/api/profiles", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ ...form, imageKey }),
+        body:    JSON.stringify({ ...form, imageKey: uploadedKey }),
       });
       if (!profileRes.ok)
         throw new Error("Profile could not be saved after the upload.");
@@ -242,14 +113,18 @@ export function useProfileUpload() {
              the newly created profile at the top when navigated to next. */
       await queryClient.invalidateQueries({ queryKey: ["profiles"] });
 
-      setStep("complete");
+      setFormStep("complete");
       setForm({ fullName: "", jobTitle: "", company: "" });
-      clearFile();
+      
+      setFile(null);
+      setUploadedKey(null);
       setUploadProgress(null);
+      setS3Step("idle");
+      setS3Error(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-      setStep("idle");
-      setUploadProgress(null);
+      setFormError(err instanceof Error ? err.message : "Something went wrong.");
+      setFormStep("idle");
     }
   }
 
@@ -261,5 +136,6 @@ export function useProfileUpload() {
     selectFile, clearFile, handleSubmit,
     setIsDragging,
     uploadProgress,
+    uploadedKey,
   };
 }

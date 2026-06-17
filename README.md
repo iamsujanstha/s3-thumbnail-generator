@@ -1,3 +1,9 @@
+<style>
+  code, pre, kbd, samp {
+    font-family: 'Fira Code', ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+  }
+</style>
+
 # Profile Studio
 
 Production-oriented Next.js profile management app using App Router, TypeScript, Tailwind CSS, MongoDB, direct-to-S3 uploads, and an asynchronous thumbnail Lambda.

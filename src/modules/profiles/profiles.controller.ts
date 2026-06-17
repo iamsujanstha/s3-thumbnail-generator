@@ -13,6 +13,7 @@ import {
   listQuerySchema,
   initiateMultipartSchema,
   completeMultipartSchema,
+  deleteTempFileSchema,
 } from "@/modules/profiles/profiles.schema";
 
 // ── Response helpers ────────────────────────────────────────────
@@ -138,5 +139,19 @@ export async function completeMultipartUpload(req: Request) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[completeMultipartUpload]", msg);
     return fail("Unable to complete multipart upload.", 500);
+  }
+}
+
+export async function deleteTempFile(req: Request) {
+  try {
+    const parsed = deleteTempFileSchema.safeParse(await req.json());
+    if (!parsed.success) return validationFail(parsed.error);
+
+    await ProfilesService.deleteTempFile(parsed.data.key);
+    return ok({ success: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[deleteTempFile]", msg);
+    return fail("Unable to delete temporary file.", 500);
   }
 }
