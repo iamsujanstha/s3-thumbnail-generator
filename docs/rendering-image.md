@@ -283,4 +283,4 @@ export function SecureImage({ imageKey }: { imageKey: string }) {
 * Do not save presigned URLs in your database. Always save the **raw key** in the database, and generate the presigned URL *on the fly* during the API request handler.
 
 ### 4. CORS configuration
-* If rendering images inside a `<canvas>` element (e.g., for resizing or cropping on the client side) or fetching them via Javascript `fetch()`, S3 must have a CORS policy configured to allow requests from your frontend domain. See standard S3 CORS setup in [nestjs-s3-presigned-upload-guide.md](file:///Users/mac/Developer/Thumbnail-app/nestjs-s3-presigned-upload-guide.md#L702-L717).
+* If rendering images inside a `<canvas>` element (e.g., for resizing or cropping on the client side) or fetching them via Javascript `fetch()`, S3 must have a CORS policy configured to allow requests from your frontend domain. See standard S3 CORS setup in [nestjs-s3-presigned-upload-guide.md](file:///Users/mac/Developer/Thumbnail-app/docs/nestjs-s3-presigned-upload-guide.md#L702-L717).
