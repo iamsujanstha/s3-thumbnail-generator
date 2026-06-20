@@ -23,7 +23,12 @@ export function toThumbnailKey(rawKey: string): string {
   return `uploads/thumbnails/${filename}.webp`;
 }
 
-/** uploads/thumbnails/abc.jpg.webp  →  /api/img/uploads/thumbnails/abc.jpg.webp */
+/** uploads/thumbnails/abc.jpg.webp  →  CloudFront URL or /api/img/... fallback */
 export function toProxyUrl(s3Key: string): string {
+  const cfUrl = process.env.NEXT_PUBLIC_CLOUDFRONT_URL;
+  if (cfUrl) {
+    const baseUrl = cfUrl.endsWith("/") ? cfUrl.slice(0, -1) : cfUrl;
+    return `${baseUrl}/${s3Key}`;
+  }
   return `/api/img/${s3Key}`;
 }
