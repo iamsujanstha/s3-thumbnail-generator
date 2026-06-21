@@ -56,7 +56,7 @@ export interface ProfileImageProps {
 /** Wrapper element classes per variant */
 const WRAPPER_CLS: Record<ProfileImageVariant, string> = {
   avatar: "relative h-10 w-10 shrink-0 overflow-hidden rounded-full ring-2 ring-slate-100",
-  hero:   "relative aspect-[4/3] w-full overflow-hidden bg-slate-100",
+  hero:   "relative aspect-[4/3] w-full overflow-hidden bg-slate-950",
   card:   "relative aspect-[4/3] w-full overflow-hidden bg-slate-100",
 };
 
@@ -143,7 +143,8 @@ export const ProfileImage = memo(function ProfileImage({
         placeholder="blur"
         blurDataURL="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mN8+uDVfwAJWgONnMg9EgAAAABJRU5ErkJggg=="
         className={cn(
-          "object-cover transition-opacity duration-500 ease-in-out",
+          variant === "hero" ? "object-contain" : "object-cover",
+          "transition-opacity duration-500 ease-in-out",
           state === "loaded" ? "opacity-100" : "opacity-0",
           state === "error"  ? "invisible"   : "visible",
         )}

@@ -6,7 +6,7 @@ export type ProfileListItemDto = {
   jobTitle:     string;
   company:      string;
   imageKey:     string;
-  thumbnailUrl: string;
+  thumbnailUrl: string | null;
   createdAt:    string;
 };
 
@@ -16,8 +16,8 @@ export type ProfileDetailDto = {
   jobTitle:     string;
   company:      string;
   imageKey:     string;
-  thumbnailUrl: string;
-  originalUrl:  string;
+  thumbnailUrl: string | null;
+  originalUrl:  string | null;
   createdAt:    string;
   updatedAt:    string;
 };

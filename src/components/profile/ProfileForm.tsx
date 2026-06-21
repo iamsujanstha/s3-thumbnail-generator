@@ -15,7 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ImageDropZone } from "@/components/profile/ImageDropZone";
 import { useProfileUpload, STEP_LABELS, type UploadStep } from "@/shared/useProfileUpload";
-import { cn } from "@/shared/utils";
+import { cn, getOriginalFilename } from "@/shared/utils";
 
 /* ─── Progress bar ───────────────────────────────────────────── */
 const STEP_ORDER: UploadStep[] = [
@@ -127,6 +127,33 @@ export function ProfileForm() {
             aria-describedby={statusId}
             noValidate
           >
+            {/* ── Image picker (Profile Avatar at the Top) ────────────────── */}
+            <div className="flex flex-col items-center space-y-1.5 pb-2">
+              <label className="text-sm font-medium text-slate-700">
+                Profile Image
+              </label>
+              <ImageDropZone
+                previewUrl={previewUrl}
+                isDragging={isDragging}
+                hasFile={!!file}
+                onFileSelect={selectFile}
+                onClear={clearFile}
+                onDragEnter={(e) => { e.preventDefault(); setIsDragging(true); }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDragging(false);
+                  selectFile(e.dataTransfer.files[0]);
+                }}
+                inputRef={fileInputRef}
+              />
+              {(file || uploadedKey) && (
+                <p className="text-xs text-slate-500 max-w-[200px] truncate mt-1 text-center" title={file?.name || getOriginalFilename(uploadedKey || "")}>
+                  File: {file?.name || getOriginalFilename(uploadedKey || "")}
+                </p>
+              )}
+            </div>
+
             {/* ── Text fields ─────────────────────────────────── */}
             <div className="profile-field-grid">
               <div className="space-y-1.5 sm:col-span-2">
@@ -178,23 +205,6 @@ export function ProfileForm() {
                 />
               </div>
             </div>
-
-            {/* ── Image picker ──────────────────────────────────── */}
-            <ImageDropZone
-              previewUrl={previewUrl}
-              isDragging={isDragging}
-              hasFile={!!file}
-              onFileSelect={selectFile}
-              onClear={clearFile}
-              onDragEnter={(e) => { e.preventDefault(); setIsDragging(true); }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setIsDragging(false);
-                selectFile(e.dataTransfer.files[0]);
-              }}
-              inputRef={fileInputRef}
-            />
 
             {/* ── Error ─────────────────────────────────────────── */}
             {error && (

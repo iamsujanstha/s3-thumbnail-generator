@@ -4,8 +4,9 @@ import { useEffect, useId, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   X, Pencil, BriefcaseBusiness, Building2,
-  Calendar, Clock, Loader2, AlertTriangle,
+  Calendar, Clock, Loader2, AlertTriangle, FileText,
 } from "lucide-react";
+import { getOriginalFilename } from "@/shared/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -177,6 +178,18 @@ export function ProfileDetailSheet({ profileId, onClose, onEdit }: Props) {
                     <dt className="sr-only">Company</dt>
                     <dd className="text-slate-700">{data.company}</dd>
                   </div>
+                  {data.imageKey && (
+                    <div className="flex items-center gap-3">
+                      <FileText
+                        className="h-4 w-4 shrink-0 text-slate-400"
+                        aria-hidden="true"
+                      />
+                      <dt className="sr-only">Filename</dt>
+                      <dd className="text-slate-500 truncate" title={getOriginalFilename(data.imageKey)}>
+                        {getOriginalFilename(data.imageKey)}
+                      </dd>
+                    </div>
+                  )}
                   <div className="flex items-center gap-3">
                     <Calendar
                       className="h-4 w-4 shrink-0 text-slate-400"

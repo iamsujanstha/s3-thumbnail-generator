@@ -3,48 +3,49 @@ import { z } from "zod";
 const imageMimeTypes = ["image/jpeg", "image/png", "image/webp"] as const;
 
 export const createProfileSchema = z.object({
-  fullName:  z.string().trim().min(2).max(120),
-  jobTitle:  z.string().trim().min(2).max(120),
-  company:   z.string().trim().min(2).max(120),
-  imageKey:  z.string().startsWith("uploads/raw/").max(512),
+  fullName: z.string().trim().min(2).max(120),
+  jobTitle: z.string().trim().min(2).max(120),
+  company: z.string().trim().min(2).max(120),
+  imageKey: z.union([z.string().startsWith("uploads/raw/").max(512), z.literal("")]),
 });
 
 export const updateProfileSchema = z.object({
   fullName: z.string().trim().min(2).max(120),
   jobTitle: z.string().trim().min(2).max(120),
-  company:  z.string().trim().min(2).max(120),
+  company: z.string().trim().min(2).max(120),
+  imageKey: z.union([z.string().startsWith("uploads/raw/").max(512), z.literal("")]).optional(),
 });
 
 export const presignUploadSchema = z.object({
-  filename:    z.string().trim().min(1).max(180),
+  filename: z.string().trim().min(1).max(180),
   contentType: z.enum(imageMimeTypes),
-  size:        z.number().int().positive().max(200 * 1024 * 1024),
-  contentMd5:  z.string().min(1).optional(),
+  size: z.number().int().positive().max(200 * 1024 * 1024),
+  contentMd5: z.string().min(1).optional(),
 });
 
 export const listQuerySchema = z.object({
-  limit:  z.coerce.number().int().min(1).max(50).default(12),
+  limit: z.coerce.number().int().min(1).max(50).default(12),
   cursor: z.string().optional(),
 });
 
 export type CreateProfileDto = z.infer<typeof createProfileSchema>;
 export type UpdateProfileDto = z.infer<typeof updateProfileSchema>;
 export type PresignUploadDto = z.infer<typeof presignUploadSchema>;
-export type ListQueryDto     = z.infer<typeof listQuerySchema>;
+export type ListQueryDto = z.infer<typeof listQuerySchema>;
 
 export const initiateMultipartSchema = z.object({
-  filename:    z.string().trim().min(1).max(180),
+  filename: z.string().trim().min(1).max(180),
   contentType: z.enum(imageMimeTypes),
-  size:        z.number().int().positive(),
+  size: z.number().int().positive(),
 });
 
 export const completeMultipartSchema = z.object({
   uploadId: z.string().min(1),
-  key:      z.string().startsWith("uploads/raw/").max(512),
-  parts:    z.array(
+  key: z.string().startsWith("uploads/raw/").max(512),
+  parts: z.array(
     z.object({
       PartNumber: z.number().int().positive(),
-      ETag:       z.string().min(1),
+      ETag: z.string().min(1),
     })
   ),
 });

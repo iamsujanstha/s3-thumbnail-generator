@@ -30,7 +30,7 @@ function getClient(): S3Client {
   return _client;
 }
 
-export const StorageService = {
+export const S3Service = {
   async createPutUrl(input: { key: string; contentType: string; contentMd5?: string }): Promise<string> {
     return getSignedUrl(
       getClient(),

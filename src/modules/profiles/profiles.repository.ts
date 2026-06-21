@@ -30,9 +30,10 @@ export type FindManyResult = {
 };
 
 export type UpdateData = {
-  fullName: string;
-  jobTitle: string;
-  company:  string;
+  fullName:  string;
+  jobTitle:  string;
+  company:   string;
+  imageKey?: string;
 };
 
 // ── Repository ────────────────────────────────────────────────────

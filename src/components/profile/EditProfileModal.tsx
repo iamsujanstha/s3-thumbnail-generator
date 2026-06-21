@@ -5,6 +5,9 @@ import { X, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { ProfileListItemDto, UpdateProfileDto } from "@/shared/dtos";
+import { useS3Upload } from "@/shared/useS3Upload";
+import { ImageDropZone } from "@/components/profile/ImageDropZone";
+import { getOriginalFilename } from "@/shared/utils";
 
 type Props = {
   profile: ProfileListItemDto | null;
@@ -37,6 +40,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props) {
   const isOpen = !!profile;
   const titleId = useId();
   const firstInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [form, setForm] = useState<FormState>({
     fullName: "",
@@ -45,6 +49,23 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props) {
   });
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [hasClearedOriginalImage, setHasClearedOriginalImage] = useState(false);
+
+  const {
+    file,
+    setFile,
+    uploadedKey,
+    setUploadedKey,
+    step: s3Step,
+    setStep: setS3Step,
+    error: s3Error,
+    uploadProgress,
+    setUploadProgress,
+    previewUrl,
+    selectFile,
+    clearFile,
+  } = useS3Upload();
 
   /* Sync + autofocus */
   useEffect(() => {
@@ -55,23 +76,39 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props) {
         company: profile.company,
       });
       setError(null);
+      setFile(null);
+      setUploadedKey(null);
+      setUploadProgress(null);
+      setS3Step("idle");
+      setHasClearedOriginalImage(false);
       // Focus first input after mount
       requestAnimationFrame(() => firstInputRef.current?.focus());
     }
-  }, [profile]);
+  }, [profile, setFile, setUploadedKey, setUploadProgress, setS3Step]);
 
   /* Escape key */
   useEffect(() => {
     if (!isOpen) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isSaving) onClose();
+      const isUploading = s3Step === "uploading" || s3Step === "presigning" || s3Step === "saving";
+      if (e.key === "Escape" && !isSaving && !isUploading) onClose();
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [isOpen, isSaving, onClose]);
+  }, [isOpen, isSaving, s3Step, onClose]);
+
+  /* Revoke object URL on unmount / file change */
+  useEffect(() => {
+    return () => { if (previewUrl) URL.revokeObjectURL(previewUrl); };
+  }, [previewUrl]);
 
   function updateField(field: keyof FormState, value: string) {
     setForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  function handleClear() {
+    clearFile();
+    setHasClearedOriginalImage(true);
   }
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
@@ -86,6 +123,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props) {
         fullName: form.fullName.trim(),
         jobTitle: form.jobTitle.trim(),
         company: form.company.trim(),
+        ...(uploadedKey ? { imageKey: uploadedKey } : hasClearedOriginalImage ? { imageKey: "" } : {}),
       };
 
       const res = await fetch(`/api/profiles/${profile.id}`, {
@@ -99,6 +137,9 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props) {
         throw new Error(data.error ?? "Failed to update profile.");
       }
 
+      // Reset file and key states so unmount effect doesn't trigger S3 delete
+      setUploadedKey(null);
+      setFile(null);
       onSaved(body.fullName);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
@@ -107,12 +148,19 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props) {
     }
   }
 
+  const isUploading = s3Step === "uploading" || s3Step === "presigning" || s3Step === "saving";
+  const combinedError = error || s3Error;
+
   /* Dirty state check */
   const isDirty = profile
     ? form.fullName !== profile.fullName ||
       form.jobTitle !== profile.jobTitle ||
-      form.company !== profile.company
+      form.company !== profile.company ||
+      !!uploadedKey ||
+      (hasClearedOriginalImage && !!profile.imageKey)
     : false;
+
+  const finalPreviewUrl = previewUrl || (hasClearedOriginalImage ? null : (profile ? profile.thumbnailUrl : null));
 
   if (!isOpen) return null;
 
@@ -121,7 +169,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props) {
       {/* Backdrop */}
       <div
         className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] animate-fade-in"
-        onClick={!isSaving ? onClose : undefined}
+        onClick={!isSaving && !isUploading ? onClose : undefined}
         aria-hidden="true"
       />
 
@@ -132,7 +180,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props) {
         aria-labelledby={titleId}
         className="fixed inset-0 z-50 flex items-center justify-center p-4"
       >
-        <div className="w-full max-w-md animate-scale-in rounded-2xl border border-slate-200 bg-white shadow-large">
+        <div className="w-full max-w-md animate-scale-in rounded-2xl border border-slate-200 bg-white shadow-large overflow-y-auto max-h-[90vh]">
           {/* Header */}
           <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
             <h2 id={titleId} className="text-base font-semibold text-slate-900">
@@ -142,7 +190,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props) {
               variant="ghost"
               size="icon-sm"
               onClick={onClose}
-              disabled={isSaving}
+              disabled={isSaving || isUploading}
               aria-label="Close dialog"
               type="button"
             >
@@ -152,6 +200,38 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props) {
 
           {/* Form */}
           <form onSubmit={handleSubmit} noValidate className="p-6 space-y-4">
+            {/* Image Drop Zone (Profile Avatar at the Top) */}
+            <div className="flex flex-col items-center space-y-1.5 pb-2">
+              <label className="text-sm font-medium text-slate-700">
+                Profile Image
+              </label>
+              <ImageDropZone
+                previewUrl={finalPreviewUrl}
+                isDragging={isDragging}
+                hasFile={!!file || (!!profile?.imageKey && !uploadedKey && !hasClearedOriginalImage)}
+                onFileSelect={selectFile}
+                onClear={handleClear}
+                onDragEnter={(e) => { e.preventDefault(); setIsDragging(true); }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDragging(false);
+                  selectFile(e.dataTransfer.files[0]);
+                }}
+                inputRef={fileInputRef}
+              />
+              {isUploading && (
+                <p className="text-xs text-blue-600 animate-pulse mt-1">
+                  Uploading new image… {uploadProgress ? `${uploadProgress.percent}%` : ""}
+                </p>
+              )}
+              {(file || (profile?.imageKey && !hasClearedOriginalImage)) && !isUploading && (
+                <p className="text-xs text-slate-500 max-w-[200px] truncate mt-1 text-center" title={file?.name || getOriginalFilename(profile?.imageKey || "")}>
+                  File: {file?.name || getOriginalFilename(profile?.imageKey || "")}
+                </p>
+              )}
+            </div>
+
             {/* Full name */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
@@ -171,7 +251,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props) {
                 maxLength={MAX}
                 value={form.fullName}
                 onChange={(e) => updateField("fullName", e.target.value)}
-                disabled={isSaving}
+                disabled={isSaving || isUploading}
                 aria-required="true"
               />
             </div>
@@ -194,7 +274,7 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props) {
                 maxLength={MAX}
                 value={form.jobTitle}
                 onChange={(e) => updateField("jobTitle", e.target.value)}
-                disabled={isSaving}
+                disabled={isSaving || isUploading}
                 aria-required="true"
               />
             </div>
@@ -217,18 +297,18 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props) {
                 maxLength={MAX}
                 value={form.company}
                 onChange={(e) => updateField("company", e.target.value)}
-                disabled={isSaving}
+                disabled={isSaving || isUploading}
                 aria-required="true"
               />
             </div>
 
             {/* Error */}
-            {error && (
+            {combinedError && (
               <p
                 role="alert"
                 className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
               >
-                {error}
+                {combinedError}
               </p>
             )}
 
@@ -239,14 +319,14 @@ export function EditProfileModal({ profile, onClose, onSaved }: Props) {
                 variant="secondary"
                 className="flex-1"
                 onClick={onClose}
-                disabled={isSaving}
+                disabled={isSaving || isUploading}
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
                 className="flex-1"
-                disabled={isSaving || !isDirty}
+                disabled={isSaving || isUploading || (!!file && !uploadedKey) || !isDirty}
                 aria-disabled={!isDirty}
               >
                 {isSaving ? (

@@ -7,12 +7,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ProfileImage } from "@/components/ui/ProfileImage";
 import { useOverlayActions } from "@/components/profile/ProfileTableContext";
 import type { ProfileListItemDto } from "@/shared/dtos";
+import { getOriginalFilename } from "@/shared/utils";
 
 export const AvatarCell = memo(function AvatarCell({
   thumbnailUrl,
   fullName,
 }: {
-  thumbnailUrl: string;
+  thumbnailUrl: string | null;
   fullName: string;
 }) {
   return (
@@ -53,6 +54,10 @@ export const ProfileRow = memo(function ProfileRow({
 
       <td className="px-4 py-3 align-middle">
         <span className="text-slate-600">{profile.company}</span>
+      </td>
+
+      <td className="px-4 py-3 align-middle max-w-[160px] truncate" title={getOriginalFilename(profile.imageKey)}>
+        <span className="text-slate-600 truncate">{getOriginalFilename(profile.imageKey)}</span>
       </td>
 
       <td className="px-4 py-3 align-middle">
@@ -115,6 +120,7 @@ export const TableSkeletonRows = memo(function TableSkeletonRows({
           <td className="px-4 py-3"><Skeleton className="h-4 w-32" /></td>
           <td className="px-4 py-3"><Skeleton className="h-4 w-24" /></td>
           <td className="px-4 py-3"><Skeleton className="h-4 w-28" /></td>
+          <td className="px-4 py-3"><Skeleton className="h-4 w-28" /></td>
           <td className="px-4 py-3"><Skeleton className="h-4 w-20" /></td>
           <td className="px-4 py-3" />
         </tr>
@@ -131,7 +137,7 @@ export const TableEmptyState = memo(function TableEmptyState({
 }) {
   return (
     <tr>
-      <td colSpan={6}>
+      <td colSpan={7}>
         <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
           <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-100">
             <Users className="h-7 w-7 text-slate-400" />

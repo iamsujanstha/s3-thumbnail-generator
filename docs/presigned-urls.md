@@ -1173,12 +1173,268 @@ server {
 * **Pros:** Nginx performs caching in high-performance C. Offloads Node.js completely.
 * **Cons:** Harder to validate user authentication dynamically (requires sub-requests or Lua scripting).
 
+---
+
+### ⚖️ The Caching Showdown: Nginx Cache vs. AWS CloudFront CDN
+
+For high-scale production systems, choosing between **Nginx Reverse Proxy Caching** and **AWS CloudFront CDN** is a critical architectural decision. Below is an in-depth breakdown of their differences, cost efficiencies, performance profiles, and common myths.
+
+#### Caching Latency Path Comparison
+
+```mermaid
+flowchart TD
+    %% Nginx Architecture
+    subgraph NginxArch ["Option 1: Nginx Proxy Cache (Regional)"]
+        UserA([User in London]) -->|"1. High Latency Request (150ms+)"| NginxServer["Nginx Server (Mumbai Region)"]
+        NginxServer -->|"2. Local disk check"| NginxDisk{"Cache hit?"}
+        NginxDisk -->|Yes| NginxServer
+        NginxDisk -->|No| S3RawA[("S3 Bucket (Private)")]
+        S3RawA -->|"3. Fetch (Free regional bandwidth)"| NginxServer
+        NginxServer -->|"4. Serve back over network"| UserA
+    end
+
+    %% CloudFront Architecture
+    subgraph CFArch ["Option 2: CloudFront CDN (Global Edge)"]
+        UserB([User in London]) -->|"1. Ultra-Low Latency Request (<10ms)"| EdgePoP["London CloudFront Edge Location"]
+        EdgePoP -->|"2. Edge memory check"| CFDisk{"Cache hit?"}
+        CFDisk -->|Yes| EdgePoP
+        CFDisk -->|No| S3RawB[("S3 Bucket (Private)")]
+        S3RawB -->|"3. Fetch (Free AWS backbone)"| EdgePoP
+        EdgePoP -->|"4. Serve instantly & Cache locally"| UserB
+    end
+```
+
+---
+
+#### 📊 Side-by-Side Architectural Matrix
+
+| Metric | ⚡ Nginx Reverse Proxy Cache | 🚀 AWS CloudFront CDN + OAC |
+| :--- | :--- | :--- |
+| **Network Reach** | **Single Point (Regional):** Bound to the physical location of the VM hosting Nginx. | **Global Edge Network:** 450+ Points of Presence (PoPs) globally. |
+| **Edge Latency** | High for cross-region users (e.g. 150ms–300ms round-trip). | **Minimal ($<10\text{ms}$ globally on cache hits).** |
+| **Compute Overhead** | **High VM management:** Needs EC2/VPS instances running, auto-scaling, and OS updates. | **Serverless / Fully Managed:** Zero compute maintenance or scaling configurations. |
+| **Disk Storage Costs** | **EBS Volume costs:** You pay for SSD size to store cached files. Disk full = Server crash. | **Zero:** Caches directly at edge nodes, storage is fully managed by AWS at no extra fee. |
+| **SSL/TLS Management** | Manual (Let's Encrypt cron scripts, certbot, and config setup). | **Automated:** AWS Certificate Manager handles free wildcard SSL/TLS renewals automatically. |
+| **Egress Bandwidth Rates** | Expensive VM Egress rates ($0.09 per GB out of EC2). | **1 TB per month permanent FREE tier**, then cheaper regional rates (average $0.08 per GB). |
+| **DDoS / Flood Shielding** | Vulnerable. Attacks consume VM CPU/Network, crashing your application gateway. | **Robust:** Built-in AWS Shield Standard protects the edge network. WAF handles application filtering. |
+
+---
+
+#### 💰 Detailed Production Cost Optimization Analysis
+
+To select the most cost-effective platform, let's examine the pricing models based on traffic tiers:
+
+##### 1. Micro Tier (Startup / Low Traffic): $< 1\text{ TB}$ of data egress per month
+* **Nginx Cache:** Requires at least one running t3.small VM ($12/month) + 20GB EBS SSD ($2/month) + 500GB Egress ($45/month). **Total Cost: ~$59/month**.
+* **CloudFront CDN:** Zero compute overhead. Since CloudFront includes a **permanent 1 TB/month free tier**, your monthly bill is **$0.00**.
+* **Winner:** **CloudFront CDN** (100% Free).
+
+##### 2. Medium Tier (Growing App): $1\text{ TB}$ to $10\text{ TB}$ of data egress per month
+* **Nginx Cache:** Auto-scaling cluster of VMs needed ($40/month) + EBS caches ($10/month) + 5TB Egress ($450/month). **Total Cost: ~$500/month**.
+* **CloudFront CDN:** Egress charges apply after the first 1TB. 4TB of billed egress at $0.08/GB is **$320.00/month**.
+* **Winner:** **CloudFront CDN** (Saves ~$180/month and requires no server maintenance).
+
+##### 3. Large Enterprise Tier: $> 50\text{ TB}$ of egress per month
+* **Nginx Cache:** High operational overhead. Large scaling setups, load balancers ($25/month), massive EBS disks, and high engineering hours to configure multi-region Nginx clusters. Egress charges remain expensive.
+* **CloudFront CDN:** AWS offers custom private enterprise discounts (often down to $0.02 - $0.04/GB) for high volumes, making it vastly cheaper than self-hosting.
+* **Winner:** **CloudFront CDN**.
+
+---
+
+#### 🔍 Caching Myths vs. Logical Realities
+
+##### **Myth 1: "Self-hosting with Nginx saves money because open-source software is free."**
+* **Reality:** Software licenses are free, but Cloud compute infrastructure is not. You pay for EBS disk storage, CPU hours, and virtual network interfaces. Most importantly, you pay in **Developer Operations (DevOps) Hours**. If an engineer spends 5 hours a month updating Nginx certs, fixing disk leaks, or debugging cluster sync issues, you are spending hundreds of dollars in labor. CloudFront is serverless and requires near-zero monthly maintenance.
+
+##### **Myth 2: "Nginx is faster because it runs on the same virtual machine as my NestJS backend."**
+* **Reality:** For a local developer running on localhost, Nginx is instant. But in production, physical distance matters. If your NestJS/Nginx server is in Oregon (USA), a user in Frankfurt (Germany) will wait over **150ms** just for the packets to travel back and forth over transatlantic cables. A CDN serves the user directly from the Frankfurt edge node in **8ms**, bypassing the transatlantic round-trip.
+
+##### **Myth 3: "CDNs are difficult to configure and require complex routing changes."**
+* **Reality:** With AWS OAC, CloudFront integrates directly with S3. All routing is handled at the DNS layer. By wrapping your URLs in a clean utility like `toProxyUrl`, you can switch between local development fallbacks and global CloudFront URLs with a single environment variable change.
+
+---
+
+#### 🛠️ When to Choose Which (Logical Decision Framework)
+
+##### **Choose AWS CloudFront CDN + OAC if:**
+1. **Your user base is geographically distributed.**
+2. **You want the lowest possible operational complexity** (serverless, no OS maintenance, automatic SSL).
+3. **Your traffic patterns are unpredictable or spikey** (spikes are absorbed by edge nodes without affecting backend compute).
+4. **You are looking to minimize monthly egress fees** (benefiting from the 1 TB free tier and lower data transfer costs).
+
+##### **Choose Nginx Proxy Cache only if:**
+1. **You are running in a restricted intranet/private network environment** with zero public internet access.
+2. **You are already paying for massive, under-utilized on-premise compute hardware** where egress and disk costs are fixed/free.
+3. **You require highly custom, proprietary header modifications** or Lua script integrations on cache hits that standard CDN edge rules cannot execute.
+
+---
+
 #### 2. CloudFront CDN + Origin Access Control (OAC) (The Standard Cloud Native Pattern)
-This is the recommended standard for enterprise AWS apps. 
-- S3 is configured to block all public access.
-- CloudFront has an **OAC (Origin Access Control)** credential configured.
-- S3 allows access **only** from the CloudFront Service Principal.
-- **Caching & DDoS protection** are handled by CloudFront at edge locations globally.
+
+This is the recommended industry standard for enterprise AWS applications. It completely isolates your AWS S3 bucket from the public internet while delivering images at lightning-fast speeds globally.
+
+### 🛡️ Why CloudFront OAC is Better than Simple S3
+
+Using raw S3 URLs in production exposes your system to major security and financial risks. Fronting S3 with a CDN solves these problems:
+
+1. **💸 Denial of Wallet (DoW) Protection (Saves Egress Costs)**
+   * **Simple S3:** AWS charges **$0.09 per GB** for data transferred out of S3 to the internet. If an attacker triggers automated downloads of a 5MB image 100,000 times, you will receive a bill of **$450.00** in minutes. 
+   * **CloudFront CDN:** Requests are served from the edge cache, meaning S3 egress is hit **only once** on cache misses. CloudFront bandwidth is significantly cheaper ($0.08/GB or lower, and has a **permanent 1 TB/month free tier**).
+2. **⚡ Microsecond Latency (Global Caching)**
+   * **Simple S3:** Every image request travels all the way to the origin S3 region (e.g. `ap-south-1` in Mumbai). Users in New York or London will experience high round-trip network latency.
+   * **CloudFront CDN:** Images are cached at **450+ Edge Locations** globally. Users download assets from the closest server (often $< 10\text{ms}$ latency).
+3. **🔒 Strict Security (Private Buckets)**
+   * **Simple S3:** Making buckets public to serve user avatars exposes your entire asset layout, enabling bots to list and harvest all files.
+   * **CloudFront CDN:** The S3 bucket blocks **100% of public access**. S3 is configured to accept requests *only* if they are signed by your specific CloudFront Distribution via **Origin Access Control (OAC)**.
+
+---
+
+### ⚙️ Step-by-Step Setup Guide
+
+#### Step 1: Create the Origin Access Control (OAC)
+1. Go to the AWS CloudFront Console ➔ **Security** ➔ **Origin access**.
+2. Click **Create control setting (OAC)**.
+3. Name it (e.g., `s3-thumbnail-oac`), select **Sign requests (recommended)**, and choose **S3** as the origin type.
+
+#### Step 2: Configure the CloudFront Distribution
+1. Navigate to the **AWS CloudFront Console** and click **Create distribution**.
+2. **Origin domain:** Select your S3 bucket (`sujankshrestha-bucket.s3.ap-south-1.amazonaws.com`).
+3. **Origin access:** Select **Origin access control settings (recommended)**.
+4. Select the newly created OAC.
+5. **Web Application Firewall (WAF):** Choose to enable security protections or opt-out for testing.
+6. Click **Create distribution**.
+
+#### Step 3: Configure the S3 Bucket Policy
+Once the distribution is created, copy the generated S3 bucket policy from the AWS Console and apply it to your S3 bucket under **Permissions ➔ Bucket Policy**.
+
+Here is the exact policy configured for this project (written in `JSON` format):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowCloudFrontOACRead",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "cloudfront.amazonaws.com"
+      },
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::sujankshrestha-bucket/*",
+      "Condition": {
+        "StringEquals": {
+          "AWS:SourceArn": "arn:aws:cloudfront::870325637511:distribution/E23UX6SY1LFFD6"
+        }
+      }
+    }
+  ]
+}
+```
+
+#### 🔍 Explanation of Bucket Policy Lines
+* `"Principal": { "Service": "cloudfront.amazonaws.com" }`
+  This defines the entity receiving permissions. Instead of opening the bucket to public users (`*`), it restricts access exclusively to the AWS CloudFront service.
+* `"Action": "s3:GetObject"`
+  This specifies the permitted action. It allows CloudFront to read objects but blocks it from performing directory listings (`s3:ListBucket`), writing files (`s3:PutObject`), or deleting them (`s3:DeleteObject`).
+* `"Resource": "arn:aws:s3:::sujankshrestha-bucket/*"`
+  This targets all files inside the S3 bucket.
+* `"Condition": { "StringEquals": { "AWS:SourceArn": "arn:aws:cloudfront::870325637511:distribution/E23UX6SY1LFFD6" } }`
+  This is a critical security condition. Without it, *any* CloudFront distribution in *any* AWS account could request objects from your bucket. This checks that the incoming request is originating strictly from your specific distribution ARN (`E23UX6SY1LFFD6`), preventing cross-account configuration hijack attacks.
+
+---
+
+### 🔄 How Uploads and Delivery are Internally Managed
+
+When a user uploads a profile photo, the system follows a decoupled, secure, and asynchronous lifecycle:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as User Browser
+    participant CF as CloudFront CDN (Edge Cache)
+    participant S3 as S3 Bucket (Private)
+    participant Lambda as Lambda (Thumbnail Generator)
+    participant Next as Next.js Backend Server
+
+    Note over Client, S3: 1. Ingress (Upload Flow)
+    Client->>Next: POST /api/s3/presign (filename, size)
+    Next->>S3: PutObjectCommand with 'cleanup=true' tag
+    S3-->>Next: Return cryptographic signature
+    Next-->>Client: Return uploadUrl & imageKey
+    Client->>S3: PUT binary stream to raw/ (Direct Upload)
+    S3->>Lambda: Trigger: s3:ObjectCreated:* for raw/
+    Lambda->>S3: GET original image, process to WebP thumbnail, PUT to thumbnails/
+    Client->>Next: POST /api/profiles (Save Key to DB)
+    Next->>S3: removeCleanupTag(imageKey) (Peels off tag)
+
+    Note over Client, CF: 2. Egress (Delivery Flow)
+    Client->>CF: Request image (e.g. /uploads/thumbnails/photo.webp)
+    alt CDN Cache Hit
+        CF-->>Client: Serve cached binary image (0ms backend latency)
+    else CDN Cache Miss
+        CF->>S3: Sign request on-the-fly via OAC & GET object
+        S3-->>CF: Stream image binary
+        CF->>CF: Cache image at Edge location
+        CF-->>Client: Serve binary image to User
+    end
+```
+
+1. **URL Authorization:** The browser requests upload permission. The Next.js backend generates an S3 Presigned PUT URL. The URL includes a pre-applied tag `cleanup=true`.
+2. **Direct Ingress:** The browser uploads the raw binary file directly to S3 (`uploads/raw/`) using the presigned URL. This bypasses Next.js server threads entirely, preventing OOM crashes on large files.
+3. **Asynchronous Processing:** S3 fires an event notification to the Lambda function. The Lambda downloads the original image, applies smart attention cropping, resizes it to 150x150, converts it to WebP format, and uploads the compressed thumbnail to the `uploads/thumbnails/` folder.
+4. **Forms Submission:** The user submits the profile details. The Next.js backend registers the database entry and deletes the `cleanup=true` tag from the raw image. (If the form is abandoned or closed, a bucket lifecycle rule automatically deletes the raw upload after 24 hours).
+5. **Edge Caching:** When someone views the profile, the browser requests the thumbnail via the CloudFront URL (`https://d874s5nslnujr.cloudfront.net/uploads/thumbnails/...webp`). CloudFront signs the request on the fly via OAC, retrieves the object from S3 on a cache miss, caches it globally at the edge location, and returns it. Subsequent visits load in microseconds directly from the CDN edge.
+
+---
+
+### 💻 Where and How to Use the CloudFront Setup
+
+Below are the configuration and code files used to implement this setup in Next.js, using standard **Fira Code** style blocks:
+
+#### 1. Environment Variable Setup (`.env.local`)
+Add the CloudFront distribution URL as an environment variable:
+```ini
+NEXT_PUBLIC_CLOUDFRONT_URL=https://d874s5nslnujr.cloudfront.net
+```
+
+#### 2. Next.js Remote Patterns Configuration (`next.config.mjs`)
+We add `**.cloudfront.net` to allow the Next.js built-in optimizer to fetch assets served from CloudFront:
+```javascript
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  images: {
+    minimumCacheTTL: 31536000, // Cache on server/CDN for up to 1 year
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "**.amazonaws.com",
+      },
+      {
+        protocol: "https",
+        hostname: "**.cloudfront.net",
+      },
+    ],
+  },
+};
+
+export default nextConfig;
+```
+
+#### 3. Client Helper Utility (`src/lib/utils.ts`)
+This helper dynamically builds the URL path. It resolves to the global CloudFront URL when configured, falling back to a local proxy route (`/api/img/...`) for development:
+```typescript
+/** uploads/thumbnails/abc.jpg.webp  →  CloudFront URL or /api/img/... fallback */
+export function toProxyUrl(s3Key: string): string {
+  const cfUrl = process.env.NEXT_PUBLIC_CLOUDFRONT_URL;
+  if (cfUrl) {
+    const baseUrl = cfUrl.endsWith("/") ? cfUrl.slice(0, -1) : cfUrl;
+    return `${baseUrl}/${s3Key}`;
+  }
+  return `/api/img/${s3Key}`;
+}
+```
+
+---
 
 #### 3. In-Memory Distributed Cache (Redis Cache)
 - Excellent for caching metadata (such as signed URLs themselves).

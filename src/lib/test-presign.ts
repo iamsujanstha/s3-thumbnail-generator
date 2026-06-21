@@ -1,4 +1,4 @@
-import { StorageService } from "../modules/storage/storage.service";
+import { S3Service } from "../modules/aws/S3.service";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -20,13 +20,13 @@ if (fs.existsSync(envPath)) {
 }
 
 async function main() {
-  const url = await StorageService.createPutUrl({
+  const url = await S3Service.createPutUrl({
     key: "uploads/raw/test-headers.jpg",
     contentType: "image/jpeg",
     contentMd5: "1B2M2Y8AsgTpgAmY7PhCfg==",
   });
   console.log("Presigned URL:", url);
-  
+
   const parsedUrl = new URL(url);
   console.log("Signed Headers:", parsedUrl.searchParams.get("X-Amz-SignedHeaders"));
 }

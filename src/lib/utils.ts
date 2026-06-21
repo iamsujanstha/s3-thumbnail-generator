@@ -32,3 +32,15 @@ export function toProxyUrl(s3Key: string): string {
   }
   return `/api/img/${s3Key}`;
 }
+
+/** extracts "screenshot.png" from "uploads/raw/86e13213-cf01-4b6a-a7d3-c6d874eb81d1-screenshot.png" */
+export function getOriginalFilename(imageKey: string): string {
+  const filename = imageKey.split("/").pop();
+  if (!filename) return "";
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/i;
+  if (uuidRegex.test(filename)) {
+    return filename.replace(uuidRegex, "");
+  }
+  return filename;
+}
+
