@@ -24,7 +24,7 @@ const STEP_ORDER: UploadStep[] = [
 
 function UploadProgressBar({ step }: { step: UploadStep }) {
   if (step === "idle" || step === "complete") return null;
-  const active   = STEP_ORDER.indexOf(step);
+  const active = STEP_ORDER.indexOf(step);
   const segments = ["presigning", "uploading", "saving"] as const;
   return (
     <div className="upload-step-bar" aria-hidden="true">
@@ -150,7 +150,7 @@ export function ProfileForm() {
                         : "text-slate-500 hover:text-slate-900 disabled:opacity-50"
                     )}
                   >
-                    Pure CDN Caching (New)
+                    Next.js Proxy (On-the-Fly)
                   </button>
                   <button
                     type="button"
@@ -163,12 +163,12 @@ export function ProfileForm() {
                         : "text-slate-500 hover:text-slate-900 disabled:opacity-50"
                     )}
                   >
-                    S3 Trigger (Old)
+                    S3 Trigger (Background)
                   </button>
                 </div>
                 <p className="text-[10px] text-slate-500 leading-normal">
                   {strategy === "dynamic"
-                    ? "✓ Uploads to uploads/dynamic/. Skip AWS Lambda. CDN edge resizes dynamically via Query Param (?w=x&h=y)."
+                    ? "✓ Uploads to uploads/dynamic/. Resizes on-the-fly inside Next.js server using sharp (zero AWS Lambda trigger, CDN cached)."
                     : "✓ Uploads to uploads/raw/. Triggers S3 Lambda execution to generate a static uploads/thumbnails/ file."}
                 </p>
               </div>

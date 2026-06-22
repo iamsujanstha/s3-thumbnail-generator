@@ -14,25 +14,25 @@ export type UploadStep =
 export type ProfileFormState = {
   fullName: string;
   jobTitle: string;
-  company:  string;
+  company: string;
 };
 
 export const STEP_LABELS: Record<UploadStep, string> = {
-  idle:       "Ready",
+  idle: "Ready",
   presigning: "Securing upload…",
-  uploading:  "Uploading image…",
-  saving:     "Saving profile…",
-  complete:   "Done",
+  uploading: "Uploading image…",
+  saving: "Saving profile…",
+  complete: "Done",
 };
 
 export function useProfileUpload() {
-  const queryClient  = useQueryClient();
+  const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [form, setForm] = useState<ProfileFormState>({
     fullName: "",
     jobTitle: "",
-    company:  "",
+    company: "",
   });
 
   const {
@@ -102,9 +102,9 @@ export function useProfileUpload() {
       /* 3 — Save profile */
       setFormStep("saving");
       const profileRes = await fetch("/api/profiles", {
-        method:  "POST",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ ...form, imageKey: uploadedKey }),
+        body: JSON.stringify({ ...form, imageKey: uploadedKey }),
       });
       if (!profileRes.ok)
         throw new Error("Profile could not be saved after the upload.");
@@ -115,7 +115,7 @@ export function useProfileUpload() {
 
       setFormStep("complete");
       setForm({ fullName: "", jobTitle: "", company: "" });
-      
+
       setFile(null);
       setUploadedKey(null);
       setUploadProgress(null);

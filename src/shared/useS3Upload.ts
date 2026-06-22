@@ -211,8 +211,7 @@ export function useS3Upload() {
         if (!uploadRes.ok) {
           const s3Err = await uploadRes.text().catch(() => "");
           throw new Error(
-            `Image upload failed (${uploadRes.status})${
-              s3Err ? `: ${s3Err.slice(0, 200)}` : "."
+            `Image upload failed (${uploadRes.status})${s3Err ? `: ${s3Err.slice(0, 200)}` : "."
             }`
           );
         }

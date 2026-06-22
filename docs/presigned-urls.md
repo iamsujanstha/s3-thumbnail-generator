@@ -34,3 +34,9 @@ Please select a section below to explore the detailed implementation blueprints:
 
 ### 7. 🖼️ [On-Demand Dynamic Image Resizing with CloudFront](file:///Users/mac/Developer/Thumbnail-app/docs/dynamic-image-resizing.md)
 * **What is covers:** Real-time on-the-fly thumbnail generation, Lambda processing origins (Sharp), query-string cache keys, pros/cons vs event-driven triggers, and production security controls (signed HMAC URLs).
+
+### 8. ⚡ [Next.js Image Optimization vs. CDN Caching](file:///Users/mac/Developer/Thumbnail-app/docs/nextjs-image-optimization.md)
+* **What is covers:** Complete breakdown of the `<Image>` tag's importance, how the internal `_next/image?url=` routing engine behaves on Vercel, the role of the `unoptimized` prop, the Double-Optimization cost/bandwidth waste trap, and a decision matrix for production.
+
+### 9. 🔒 [CloudFront & S3 Advanced Security Blueprint](file:///Users/mac/Developer/Thumbnail-app/docs/cloudfront-s3-security.md)
+* **What is covers:** Step-by-step security best practices for public vs. private image delivery, Mermaid sequence flows, S3 upload controls vs. CloudFront download protection, and a senior-level systems architect interview guide.

@@ -12,14 +12,14 @@ import {
 import type { ProfileListItemDto } from "@/shared/dtos";
 
 type Props = {
-  profiles:   ProfileListItemDto[];
+  profiles: ProfileListItemDto[];
   isFetching: boolean;
-  isError:    boolean;
-  hasPrev:    boolean;
-  hasNext:    boolean;
-  onRetry:    () => void;
-  onPrev:     () => void;
-  onNext:     () => void;
+  isError: boolean;
+  hasPrev: boolean;
+  hasNext: boolean;
+  onRetry: () => void;
+  onPrev: () => void;
+  onNext: () => void;
 };
 
 export const ProfileGridView = memo(function ProfileGridView({
@@ -126,9 +126,8 @@ export const ProfileGridView = memo(function ProfileGridView({
           <p className="text-xs text-slate-500">
             {isFetching
               ? "Loading…"
-              : `${filtered.length} profile${filtered.length !== 1 ? "s" : ""}${
-                  searchValue ? " matching" : ""
-                }`}
+              : `${filtered.length} profile${filtered.length !== 1 ? "s" : ""}${searchValue ? " matching" : ""
+              }`}
           </p>
           <div className="flex items-center gap-2">
             <Button

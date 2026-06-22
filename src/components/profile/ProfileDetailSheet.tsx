@@ -158,9 +158,9 @@ export function ProfileDetailSheet({ profileId, onClose, onEdit }: Props) {
                 height={imageSize?.h}
               />
 
-              {/* Dynamic CDN Resizing Controls */}
+              {/* Dynamic Proxy Resizing Controls */}
               <div className="px-6 py-2 bg-slate-50 border-b border-slate-100 flex items-center justify-between text-xs text-slate-500">
-                <span className="font-medium">On-the-Fly CDN Resize:</span>
+                <span className="font-medium">On-the-Fly Proxy Resize:</span>
                 <div className="flex gap-1.5">
                   <button
                     onClick={() => setImageSize(null)}
