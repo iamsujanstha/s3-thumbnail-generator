@@ -56,6 +56,20 @@ export const ProfileRow = memo(function ProfileRow({
         <span className="text-slate-600">{profile.company}</span>
       </td>
 
+      <td className="px-4 py-3 align-middle">
+        {profile.imageKey?.startsWith("uploads/dynamic/") ? (
+          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 border border-emerald-200">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            Pure CDN
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700 border border-amber-200">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+            S3 Trigger
+          </span>
+        )}
+      </td>
+
       <td className="px-4 py-3 align-middle max-w-[160px] truncate" title={getOriginalFilename(profile.imageKey)}>
         <span className="text-slate-600 truncate">{getOriginalFilename(profile.imageKey)}</span>
       </td>
@@ -120,6 +134,7 @@ export const TableSkeletonRows = memo(function TableSkeletonRows({
           <td className="px-4 py-3"><Skeleton className="h-4 w-32" /></td>
           <td className="px-4 py-3"><Skeleton className="h-4 w-24" /></td>
           <td className="px-4 py-3"><Skeleton className="h-4 w-28" /></td>
+          <td className="px-4 py-3"><Skeleton className="h-6 w-16 rounded-full" /></td>
           <td className="px-4 py-3"><Skeleton className="h-4 w-28" /></td>
           <td className="px-4 py-3"><Skeleton className="h-4 w-20" /></td>
           <td className="px-4 py-3" />
@@ -137,7 +152,7 @@ export const TableEmptyState = memo(function TableEmptyState({
 }) {
   return (
     <tr>
-      <td colSpan={7}>
+      <td colSpan={8}>
         <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
           <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-100">
             <Users className="h-7 w-7 text-slate-400" />

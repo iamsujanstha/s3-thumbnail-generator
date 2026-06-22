@@ -8,7 +8,7 @@
  * The progress bar is a tiny local component.
  */
 import Link from "next/link";
-import { useEffect, useId } from "react";
+import { useEffect, useId, useState } from "react";
 import { CheckCircle2, Loader2, UploadCloud, UsersRound, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -45,6 +45,7 @@ function UploadProgressBar({ step }: { step: UploadStep }) {
 /* ─── Main component ─────────────────────────────────────────── */
 export function ProfileForm() {
   const statusId = useId();
+  const [strategy, setStrategy] = useState<"trigger" | "dynamic">("dynamic");
   const {
     fileInputRef,
     form, updateField,
@@ -132,18 +133,58 @@ export function ProfileForm() {
               <label className="text-sm font-medium text-slate-700">
                 Profile Image
               </label>
+              {/* Strategy selector */}
+              <div className="w-full max-w-sm mt-1 mb-3 space-y-1">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                  Demo Resizing Path
+                </label>
+                <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-lg">
+                  <button
+                    type="button"
+                    disabled={isBusy || !!file}
+                    onClick={() => setStrategy("dynamic")}
+                    className={cn(
+                      "py-1 px-3 rounded-md text-xs font-semibold transition-all",
+                      strategy === "dynamic"
+                        ? "bg-white text-slate-900 shadow-sm"
+                        : "text-slate-500 hover:text-slate-900 disabled:opacity-50"
+                    )}
+                  >
+                    Pure CDN Caching (New)
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isBusy || !!file}
+                    onClick={() => setStrategy("trigger")}
+                    className={cn(
+                      "py-1 px-3 rounded-md text-xs font-semibold transition-all",
+                      strategy === "trigger"
+                        ? "bg-white text-slate-900 shadow-sm"
+                        : "text-slate-500 hover:text-slate-900 disabled:opacity-50"
+                    )}
+                  >
+                    S3 Trigger (Old)
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500 leading-normal">
+                  {strategy === "dynamic"
+                    ? "✓ Uploads to uploads/dynamic/. Skip AWS Lambda. CDN edge resizes dynamically via Query Param (?w=x&h=y)."
+                    : "✓ Uploads to uploads/raw/. Triggers S3 Lambda execution to generate a static uploads/thumbnails/ file."}
+                </p>
+              </div>
+
               <ImageDropZone
                 previewUrl={previewUrl}
                 isDragging={isDragging}
                 hasFile={!!file}
-                onFileSelect={selectFile}
+                onFileSelect={(f) => selectFile(f, strategy)}
                 onClear={clearFile}
                 onDragEnter={(e) => { e.preventDefault(); setIsDragging(true); }}
                 onDragLeave={() => setIsDragging(false)}
                 onDrop={(e) => {
                   e.preventDefault();
                   setIsDragging(false);
-                  selectFile(e.dataTransfer.files[0]);
+                  selectFile(e.dataTransfer.files[0], strategy);
                 }}
                 inputRef={fileInputRef}
               />

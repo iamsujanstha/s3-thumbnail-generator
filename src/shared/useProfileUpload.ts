@@ -71,10 +71,10 @@ export function useProfileUpload() {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
-  function selectFile(candidate: File | undefined) {
+  function selectFile(candidate: File | undefined, strategy: "trigger" | "dynamic" = "trigger") {
     setFormStep("idle");
     setFormError(null);
-    s3SelectFile(candidate);
+    s3SelectFile(candidate, strategy);
   }
 
   function clearFile() {

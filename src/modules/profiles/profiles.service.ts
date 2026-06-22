@@ -27,7 +27,11 @@ export const ProfilesService = {
         jobTitle: p.jobTitle,
         company: p.company,
         imageKey: p.imageKey,
-        thumbnailUrl: p.imageKey ? toProxyUrl(toThumbnailKey(p.imageKey)) : null,
+        thumbnailUrl: p.imageKey
+          ? p.imageKey.startsWith("uploads/dynamic/")
+            ? toProxyUrl(p.imageKey)
+            : toProxyUrl(toThumbnailKey(p.imageKey))
+          : null,
         createdAt: p.createdAt.toISOString(),
       } satisfies ProfileListItemDto)),
       nextCursor,
@@ -39,9 +43,6 @@ export const ProfilesService = {
     const profile = await ProfilesRepository.findById(id);
     if (!profile) return null;
 
-    const thumbnailKey = profile.imageKey ? toThumbnailKey(profile.imageKey) : null;
-    const thumbnailExists = thumbnailKey ? await S3Service.keyExists(thumbnailKey).catch(() => false) : false;
-
     return {
       id: profile.id,
       fullName: profile.fullName,
@@ -49,9 +50,11 @@ export const ProfilesService = {
       company: profile.company,
       imageKey: profile.imageKey,
       originalUrl: profile.imageKey ? toProxyUrl(profile.imageKey) : null,
-      thumbnailUrl: thumbnailExists && thumbnailKey
-        ? toProxyUrl(thumbnailKey)
-        : (profile.imageKey ? toProxyUrl(profile.imageKey) : null),
+      thumbnailUrl: profile.imageKey
+        ? profile.imageKey.startsWith("uploads/dynamic/")
+          ? toProxyUrl(profile.imageKey)
+          : toProxyUrl(toThumbnailKey(profile.imageKey))
+        : null,
       createdAt: profile.createdAt.toISOString(),
       updatedAt: profile.updatedAt.toISOString(),
     };
@@ -126,7 +129,8 @@ export const ProfilesService = {
 
   // ── Presign S3 upload URL ───────────────────────────────────────
   async presignUpload(data: PresignUploadDto) {
-    const imageKey = `uploads/raw/${randomUUID()}-${sanitizeFilename(data.filename)}`;
+    const prefix = data.strategy === "dynamic" ? "uploads/dynamic" : "uploads/raw";
+    const imageKey = `${prefix}/${randomUUID()}-${sanitizeFilename(data.filename)}`;
     const uploadUrl = await S3Service.createPutUrl({
       key: imageKey,
       contentType: data.contentType,
@@ -137,7 +141,8 @@ export const ProfilesService = {
 
   // ── Initiate Multipart Upload ───────────────────────────────────
   async initiateMultipart(data: InitiateMultipartDto) {
-    const imageKey = `uploads/raw/${randomUUID()}-${sanitizeFilename(data.filename)}`;
+    const prefix = data.strategy === "dynamic" ? "uploads/dynamic" : "uploads/raw";
+    const imageKey = `${prefix}/${randomUUID()}-${sanitizeFilename(data.filename)}`;
     const uploadId = await S3Service.initiateMultipartUpload(imageKey, data.contentType);
 
     // Chunk size: 5MB minimum

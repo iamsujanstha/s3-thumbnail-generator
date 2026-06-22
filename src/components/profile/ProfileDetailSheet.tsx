@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   X, Pencil, BriefcaseBusiness, Building2,
@@ -46,6 +46,7 @@ export function ProfileDetailSheet({ profileId, onClose, onEdit }: Props) {
   const isOpen = !!profileId;
   const titleId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
+  const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(null);
 
   const { data, isFetching, isError } = useQuery({
     queryKey: ["profile", profileId],
@@ -60,6 +61,11 @@ export function ProfileDetailSheet({ profileId, onClose, onEdit }: Props) {
       requestAnimationFrame(() => closeRef.current?.focus());
     }
   }, [isOpen]);
+
+  /* Reset image size selection when a new profile is selected */
+  useEffect(() => {
+    setImageSize(null);
+  }, [profileId]);
 
   /* Escape to close */
   useEffect(() => {
@@ -148,7 +154,56 @@ export function ProfileDetailSheet({ profileId, onClose, onEdit }: Props) {
                 alt={`${data.fullName} — profile photo`}
                 variant="hero"
                 priority
+                width={imageSize?.w}
+                height={imageSize?.h}
               />
+
+              {/* Dynamic CDN Resizing Controls */}
+              <div className="px-6 py-2 bg-slate-50 border-b border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                <span className="font-medium">On-the-Fly CDN Resize:</span>
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={() => setImageSize(null)}
+                    className={`px-2 py-0.5 rounded border transition-colors ${
+                      imageSize === null
+                        ? "bg-blue-600 text-white border-blue-600 font-medium"
+                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
+                    }`}
+                  >
+                    Default
+                  </button>
+                  <button
+                    onClick={() => setImageSize({ w: 300, h: 225 })}
+                    className={`px-2 py-0.5 rounded border transition-colors ${
+                      imageSize?.w === 300
+                        ? "bg-blue-600 text-white border-blue-600 font-medium"
+                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
+                    }`}
+                  >
+                    300x225
+                  </button>
+                  <button
+                    onClick={() => setImageSize({ w: 100, h: 100 })}
+                    className={`px-2 py-0.5 rounded border transition-colors ${
+                      imageSize?.w === 100
+                        ? "bg-blue-600 text-white border-blue-600 font-medium"
+                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
+                    }`}
+                  >
+                    100x100
+                  </button>
+                  <button
+                    onClick={() => setImageSize({ w: 50, h: 50 })}
+                    className={`px-2 py-0.5 rounded border transition-colors ${
+                      imageSize?.w === 50
+                        ? "bg-blue-600 text-white border-blue-600 font-medium"
+                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
+                    }`}
+                  >
+                    50x50
+                  </button>
+                </div>
+              </div>
 
               {/* Info */}
               <div className="space-y-5 px-6 pt-6">

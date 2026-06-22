@@ -65,7 +65,7 @@ export function useS3Upload() {
     }
   }
 
-  async function uploadFile(fileToUpload: File) {
+  async function uploadFile(fileToUpload: File, strategy: "trigger" | "dynamic" = "trigger") {
     setError(null);
     setUploadedKey(null);
     try {
@@ -84,6 +84,7 @@ export function useS3Upload() {
             filename: fileToUpload.name,
             contentType: fileToUpload.type,
             size: fileToUpload.size,
+            strategy,
           }),
         });
         if (!initRes.ok)
@@ -186,6 +187,7 @@ export function useS3Upload() {
             contentType: fileToUpload.type,
             size: fileToUpload.size,
             contentMd5,
+            strategy,
           }),
         });
         if (!presignRes.ok)
@@ -231,7 +233,7 @@ export function useS3Upload() {
     }
   }
 
-  function selectFile(candidate: File | undefined) {
+  function selectFile(candidate: File | undefined, strategy: "trigger" | "dynamic" = "trigger") {
     setError(null);
     if (!candidate) return;
     if (!ALLOWED_TYPES.has(candidate.type)) {
@@ -249,7 +251,7 @@ export function useS3Upload() {
 
     setFile(candidate);
     setStep("idle");
-    uploadFile(candidate);
+    uploadFile(candidate, strategy);
   }
 
   function clearFile() {

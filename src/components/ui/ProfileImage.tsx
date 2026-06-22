@@ -31,7 +31,7 @@
  */
 
 import NextImage from "next/image";
-import { memo, useState, useCallback } from "react";
+import { memo, useState, useCallback, useEffect } from "react";
 import { ImageOff, UserCircle2 } from "lucide-react";
 import { cn } from "@/shared/utils";
 
@@ -41,7 +41,7 @@ export type ProfileImageVariant = "avatar" | "hero" | "card";
 type LoadState = "loading" | "loaded" | "error";
 
 export interface ProfileImageProps {
-  /** Stable same-origin proxy URL: /api/img/uploads/thumbnails/abc.webp
+  /** Stable same-origin proxy URL: /api/img/uploads/raw/abc.jpg
    *  Pass null/undefined to render a neutral placeholder. */
   src:       string | null | undefined;
   alt:       string;
@@ -49,6 +49,9 @@ export interface ProfileImageProps {
   /** Pass priority for above-the-fold images (disables lazy loading) */
   priority?: boolean;
   className?: string;
+  /** Optional custom dimension overrides to demonstrate dynamic resizing */
+  width?:    number;
+  height?:   number;
 }
 
 /* ─── Variant maps ───────────────────────────────────────────── */
@@ -88,12 +91,32 @@ export const ProfileImage = memo(function ProfileImage({
   variant,
   priority = false,
   className,
+  width,
+  height,
 }: ProfileImageProps) {
   const [state, setState] = useState<LoadState>(src ? "loading" : "error");
 
   // Stable callbacks — never cause a re-render of the parent
   const onLoad  = useCallback(() => setState("loaded"), []);
   const onError = useCallback(() => setState("error"),  []);
+
+  // Determine resizing dimensions based on variant or explicit overrides
+  const targetWidth = width ?? (variant === "avatar" ? 40 : variant === "card" ? 300 : 600);
+  const targetHeight = height ?? (variant === "avatar" ? 40 : variant === "card" ? 225 : 450);
+
+  // Build the resizing proxy URL (appends w and h query parameters)
+  const safeSrc = src || "";
+  const separator = safeSrc.includes("?") ? "&" : "?";
+  const finalSrc = safeSrc.startsWith("data:")
+    ? safeSrc
+    : safeSrc ? `${safeSrc}${separator}w=${targetWidth}&h=${targetHeight}` : "";
+
+  // Reset load state when source URL changes (e.g. dynamic dimensions are switched in the UI)
+  useEffect(() => {
+    if (finalSrc) {
+      setState("loading");
+    }
+  }, [finalSrc]);
 
   const wrapperCls = cn(WRAPPER_CLS[variant], className);
 
@@ -123,7 +146,7 @@ export const ProfileImage = memo(function ProfileImage({
              We also drive our own opacity for the shimmer hand-off.
       ──────────────────────────────────────────────────────── */}
       <NextImage
-        src={src}
+        src={finalSrc}
         alt={alt}
         fill
         sizes={IMG_SIZES[variant]}

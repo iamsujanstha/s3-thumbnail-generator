@@ -23,14 +23,15 @@ export function toThumbnailKey(rawKey: string): string {
   return `uploads/thumbnails/${filename}.webp`;
 }
 
-/** uploads/thumbnails/abc.jpg.webp  →  CloudFront URL or /api/img/... fallback */
+/** uploads/raw/abc.jpg or uploads/thumbnails/...  →  CloudFront URL */
 export function toProxyUrl(s3Key: string): string {
   const cfUrl = process.env.NEXT_PUBLIC_CLOUDFRONT_URL;
-  if (cfUrl) {
-    const baseUrl = cfUrl.endsWith("/") ? cfUrl.slice(0, -1) : cfUrl;
-    return `${baseUrl}/${s3Key}`;
+  if (!cfUrl) {
+    console.warn("WARNING: NEXT_PUBLIC_CLOUDFRONT_URL is not defined. Dynamic resizing will fail.");
+    return `/${s3Key}`;
   }
-  return `/api/img/${s3Key}`;
+  const baseUrl = cfUrl.endsWith("/") ? cfUrl.slice(0, -1) : cfUrl;
+  return `${baseUrl}/${s3Key}`;
 }
 
 /** extracts "screenshot.png" from "uploads/raw/86e13213-cf01-4b6a-a7d3-c6d874eb81d1-screenshot.png" */

@@ -1,0 +1,11 @@
+{
+  "name": "dynamic-image-resizer",
+  "version": "1.0.0",
+  "description": "On-the-fly dynamic image resizing Lambda behind CloudFront",
+  "main": "index.mjs",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.500.0",
+    "sharp": "^0.33.0"
+  }
+}

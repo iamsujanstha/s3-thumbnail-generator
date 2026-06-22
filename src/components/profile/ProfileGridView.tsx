@@ -91,7 +91,7 @@ export const ProfileGridView = memo(function ProfileGridView({
             <thead>
               <tr className="border-b border-slate-100 bg-slate-50/80">
                 <th scope="col" className="px-4 py-3" style={{ width: 56 }} />
-                {(["Name", "Job Title", "Company", "Filename", "Added"] as const).map((h) => (
+                {(["Name", "Job Title", "Company", "Resizing Strategy", "Filename", "Added"] as const).map((h) => (
                   <th
                     key={h}
                     scope="col"

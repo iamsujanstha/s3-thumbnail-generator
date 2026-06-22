@@ -31,3 +31,6 @@ Please select a section below to explore the detailed implementation blueprints:
 
 ### 6. 💾 [Caching Strategies: Local Cache vs. Nginx vs. CDN](file:///Users/mac/Developer/Thumbnail-app/docs/caching-strategies.md)
 * **What is covers:** Local disk read-through proxies, LRU pruner crons, Event-Driven S3 webhook invalidations, Nginx reverse proxy configs, and the comprehensive **Nginx Cache vs. CloudFront CDN cost-benefit showdown** (latency path charts, myths vs realities, and logical selection frameworks).
+
+### 7. 🖼️ [On-Demand Dynamic Image Resizing with CloudFront](file:///Users/mac/Developer/Thumbnail-app/docs/dynamic-image-resizing.md)
+* **What is covers:** Real-time on-the-fly thumbnail generation, Lambda processing origins (Sharp), query-string cache keys, pros/cons vs event-driven triggers, and production security controls (signed HMAC URLs).
