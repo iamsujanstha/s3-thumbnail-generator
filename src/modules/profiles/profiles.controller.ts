@@ -16,6 +16,37 @@ import {
   deleteTempFileSchema,
 } from "@/modules/profiles/profiles.schema";
 
+// ── Rate Limiting for S3 upload URLs ────────────────────────────
+const rateLimitMap = new Map<string, number[]>();
+const RATE_LIMIT_COUNT = 10;        // Max 10 requests
+const RATE_LIMIT_WINDOW = 60 * 1000; // per 1 minute window
+
+function getClientIp(req: Request): string {
+  const forwardedFor = req.headers.get("x-forwarded-for");
+  if (forwardedFor) {
+    return forwardedFor.split(",")[0].trim();
+  }
+  const realIp = req.headers.get("x-real-ip");
+  if (realIp) return realIp;
+  return "127.0.0.1";
+}
+
+function isRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const timestamps = rateLimitMap.get(ip) || [];
+  
+  // Filter out timestamps outside the window
+  const activeTimestamps = timestamps.filter((t) => now - t < RATE_LIMIT_WINDOW);
+  
+  if (activeTimestamps.length >= RATE_LIMIT_COUNT) {
+    return true;
+  }
+  
+  activeTimestamps.push(now);
+  rateLimitMap.set(ip, activeTimestamps);
+  return false;
+}
+
 // ── Response helpers ────────────────────────────────────────────
 function ok(data: unknown, status = 200) {
   return NextResponse.json(data, { status });
@@ -99,6 +130,12 @@ export async function deleteProfile(_req: Request, id: string) {
 
 export async function presignUpload(req: Request) {
   try {
+    const ip = getClientIp(req);
+    if (isRateLimited(ip)) {
+      console.warn(`[RateLimit] Blocked presigned S3 URL request from IP: ${ip}`);
+      return fail("Too many upload requests. Please try again in a minute.", 429);
+    }
+
     const parsed = presignUploadSchema.safeParse(await req.json());
     if (!parsed.success) return validationFail(parsed.error);
 
@@ -116,6 +153,12 @@ export async function presignUpload(req: Request) {
 
 export async function initiateMultipartUpload(req: Request) {
   try {
+    const ip = getClientIp(req);
+    if (isRateLimited(ip)) {
+      console.warn(`[RateLimit] Blocked multipart S3 upload initialization from IP: ${ip}`);
+      return fail("Too many upload requests. Please try again in a minute.", 429);
+    }
+
     const parsed = initiateMultipartSchema.safeParse(await req.json());
     if (!parsed.success) return validationFail(parsed.error);
 
