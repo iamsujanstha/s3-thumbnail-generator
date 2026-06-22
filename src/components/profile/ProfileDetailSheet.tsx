@@ -28,7 +28,7 @@ async function fetchProfile(id: string): Promise<ProfileDetailDto> {
 function DetailSkeleton() {
   return (
     <div className="space-y-6 pb-8" aria-hidden="true">
-      <Skeleton className="aspect-[4/3] w-full rounded-none" />
+      <Skeleton className="aspect-square w-full rounded-none" />
       <div className="space-y-4 px-6">
         <Skeleton className="h-7 w-48" />
         <div className="space-y-3">
@@ -173,14 +173,14 @@ export function ProfileDetailSheet({ profileId, onClose, onEdit }: Props) {
                     Default
                   </button>
                   <button
-                    onClick={() => setImageSize({ w: 300, h: 225 })}
+                    onClick={() => setImageSize({ w: 300, h: 300 })}
                     className={`px-2 py-0.5 rounded border transition-colors ${
                       imageSize?.w === 300
                         ? "bg-blue-600 text-white border-blue-600 font-medium"
                         : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
                     }`}
                   >
-                    300x225
+                    300x300
                   </button>
                   <button
                     onClick={() => setImageSize({ w: 100, h: 100 })}

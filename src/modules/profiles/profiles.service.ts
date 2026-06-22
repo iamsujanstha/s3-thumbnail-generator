@@ -2,13 +2,14 @@ import { randomUUID } from "crypto";
 import { ProfilesRepository } from "@/modules/profiles/profiles.repository";
 import { S3Service } from "@/modules/aws/S3.service";
 import { sanitizeFilename, toThumbnailKey, toProxyUrl } from "@/lib/utils";
-import type {
-  CreateProfileDto,
-  UpdateProfileDto,
-  PresignUploadDto,
-  ListQueryDto,
-  InitiateMultipartDto,
-  CompleteMultipartDto,
+import {
+  MAX_IMAGE_SIZE,
+  type CreateProfileDto,
+  type UpdateProfileDto,
+  type PresignUploadDto,
+  type ListQueryDto,
+  type InitiateMultipartDto,
+  type CompleteMultipartDto,
 } from "@/modules/profiles/profiles.schema";
 import type { ProfileListItemDto, ProfileDetailDto } from "@/types/dtos";
 
@@ -62,12 +63,31 @@ export const ProfilesService = {
 
   // ── Create profile ──────────────────────────────────────────────
   async create(data: CreateProfileDto) {
+    // Post-upload size and type verification in S3
+    if (data.imageKey) {
+      const meta = await S3Service.getObjectMetadata(data.imageKey);
+      if (!meta) {
+        throw new Error("Uploaded image not found in storage.");
+      }
+      if (meta.size > MAX_IMAGE_SIZE) {
+        await S3Service.deleteObject(data.imageKey);
+        throw new Error("Uploaded image exceeds the maximum size limit of 5MB.");
+      }
+      const allowedMimes = ["image/jpeg", "image/png", "image/webp"];
+      if (!allowedMimes.includes(meta.contentType)) {
+        await S3Service.deleteObject(data.imageKey);
+        throw new Error("Invalid image file type.");
+      }
+    }
+
     const profile = await ProfilesRepository.create(data);
 
     // Remove the cleanup tag so S3 lifecycle rule does not delete the original image
-    S3Service.removeCleanupTag(data.imageKey).catch((err) => {
-      console.warn(`[ProfilesService.create] Failed to remove S3 cleanup tag for key ${data.imageKey}:`, err);
-    });
+    if (data.imageKey) {
+      S3Service.removeCleanupTag(data.imageKey).catch((err) => {
+        console.warn(`[ProfilesService.create] Failed to remove S3 cleanup tag for key ${data.imageKey}:`, err);
+      });
+    }
 
     return profile;
   },
@@ -76,6 +96,23 @@ export const ProfilesService = {
   async update(id: string, data: UpdateProfileDto) {
     const existing = await ProfilesRepository.findById(id);
     if (!existing) return null;
+
+    // Validate the new file size and type if changing image
+    if (data.imageKey !== undefined && data.imageKey !== existing.imageKey && data.imageKey) {
+      const meta = await S3Service.getObjectMetadata(data.imageKey);
+      if (!meta) {
+        throw new Error("Uploaded image not found in storage.");
+      }
+      if (meta.size > MAX_IMAGE_SIZE) {
+        await S3Service.deleteObject(data.imageKey);
+        throw new Error("Uploaded image exceeds the maximum size limit of 5MB.");
+      }
+      const allowedMimes = ["image/jpeg", "image/png", "image/webp"];
+      if (!allowedMimes.includes(meta.contentType)) {
+        await S3Service.deleteObject(data.imageKey);
+        throw new Error("Invalid image file type.");
+      }
+    }
 
     const profile = await ProfilesRepository.update(id, data);
     if (!profile) return null;
@@ -134,6 +171,7 @@ export const ProfilesService = {
     const uploadUrl = await S3Service.createPutUrl({
       key: imageKey,
       contentType: data.contentType,
+      contentLength: data.size,
       contentMd5: data.contentMd5,
     });
     return { uploadUrl, imageKey };
@@ -151,10 +189,14 @@ export const ProfilesService = {
 
     const partPromises = Array.from({ length: numParts }, (_, i) => {
       const partNumber = i + 1;
+      const partSize = partNumber === numParts
+        ? data.size - i * chunkSize
+        : chunkSize;
       return S3Service.createUploadPartUrl({
         key: imageKey,
         uploadId,
         partNumber,
+        contentLength: partSize,
       }).then((uploadUrl) => ({
         partNumber,
         uploadUrl,

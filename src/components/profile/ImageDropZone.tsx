@@ -39,7 +39,7 @@ export function ImageDropZone({
           aria-label="Upload profile image — click or drag a file here"
           aria-describedby={hasFile ? undefined : hintId}
           className={cn(
-            "flex h-36 w-36 cursor-pointer flex-col items-center justify-center",
+            "relative flex h-36 w-36 cursor-pointer flex-col items-center justify-center",
             "overflow-hidden rounded-full border-2 border-dashed text-center",
             "transition-all duration-normal",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",

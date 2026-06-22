@@ -54,7 +54,7 @@ export function ProfileGrid({ profiles }: ProfileGridProps) {
           <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {profiles.map((profile, index) => (
               <Card key={profile.id} className="overflow-hidden bg-white">
-                <div className="relative aspect-[4/3] bg-slate-100">
+                <div className="relative aspect-square bg-slate-100">
                   <Image
                     src={profile.thumbnailUrl}
                     alt={`${profile.fullName} profile thumbnail`}

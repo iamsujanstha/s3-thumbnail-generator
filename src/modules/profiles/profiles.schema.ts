@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const imageMimeTypes = ["image/jpeg", "image/png", "image/webp"] as const;
+export const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB limit
 
 export const createProfileSchema = z.object({
   fullName: z.string().trim().min(2).max(120),
@@ -27,7 +28,7 @@ export const updateProfileSchema = z.object({
 export const presignUploadSchema = z.object({
   filename: z.string().trim().min(1).max(180),
   contentType: z.enum(imageMimeTypes),
-  size: z.number().int().positive().max(200 * 1024 * 1024),
+  size: z.number().int().positive().max(MAX_IMAGE_SIZE),
   contentMd5: z.string().min(1).optional(),
   strategy: z.enum(["trigger", "dynamic"]).optional().default("trigger"),
 });
@@ -45,7 +46,7 @@ export type ListQueryDto = z.infer<typeof listQuerySchema>;
 export const initiateMultipartSchema = z.object({
   filename: z.string().trim().min(1).max(180),
   contentType: z.enum(imageMimeTypes),
-  size: z.number().int().positive(),
+  size: z.number().int().positive().max(MAX_IMAGE_SIZE),
   strategy: z.enum(["trigger", "dynamic"]).optional().default("trigger"),
 });
 

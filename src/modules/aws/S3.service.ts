@@ -31,19 +31,20 @@ function getClient(): S3Client {
 }
 
 export const S3Service = {
-  async createPutUrl(input: { key: string; contentType: string; contentMd5?: string }): Promise<string> {
+  async createPutUrl(input: { key: string; contentType: string; contentLength: number; contentMd5?: string }): Promise<string> {
     return getSignedUrl(
       getClient(),
       new PutObjectCommand({
         Bucket: getEnv().S3_BUCKET_NAME,
         Key: input.key,
         ContentType: input.contentType,
+        ContentLength: input.contentLength,
         Tagging: "cleanup=true",
         ContentMD5: input.contentMd5,
       }),
       {
         expiresIn: 60 * 5,
-        signableHeaders: new Set(["content-type", "content-md5"]),
+        signableHeaders: new Set(["content-type", "content-md5", "content-length"]),
       }
     );
   },
@@ -70,6 +71,27 @@ export const S3Service = {
       if (["NotFound", "NoSuchKey"].includes(name) ||
         ["NotFound", "NoSuchKey"].includes(code) ||
         status === 404) return false;
+      throw err;
+    }
+  },
+
+  async getObjectMetadata(key: string): Promise<{ size: number; contentType: string } | null> {
+    try {
+      const res = await getClient().send(
+        new HeadObjectCommand({ Bucket: getEnv().S3_BUCKET_NAME, Key: key })
+      );
+      return {
+        size: res.ContentLength ?? 0,
+        contentType: res.ContentType ?? "",
+      };
+    } catch (err: unknown) {
+      const name = (err as { name?: string }).name ?? "";
+      const code = (err as { Code?: string }).Code ?? "";
+      const status = (err as { $metadata?: { httpStatusCode?: number } })
+        ?.$metadata?.httpStatusCode;
+      if (["NotFound", "NoSuchKey"].includes(name) ||
+        ["NotFound", "NoSuchKey"].includes(code) ||
+        status === 404) return null;
       throw err;
     }
   },
@@ -109,6 +131,7 @@ export const S3Service = {
     key: string;
     uploadId: string;
     partNumber: number;
+    contentLength: number;
   }): Promise<string> {
     return getSignedUrl(
       getClient(),
@@ -117,8 +140,12 @@ export const S3Service = {
         Key: input.key,
         UploadId: input.uploadId,
         PartNumber: input.partNumber,
+        ContentLength: input.contentLength,
       }),
-      { expiresIn: 60 * 20 }
+      {
+        expiresIn: 60 * 20,
+        signableHeaders: new Set(["content-length"]),
+      }
     );
   },
 

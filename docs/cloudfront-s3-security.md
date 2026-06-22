@@ -6,7 +6,7 @@
 
 # 🔒 CloudFront & S3 Advanced Security Blueprint (Public vs. Private Image Delivery)
 
-This guide details the security best practices for hosting and delivering images using AWS CloudFront, Origin Access Control (OAC), and S3. It contrasts the delivery models of **public images** and **strictly private assets**, illustrates their lifecycles using Mermaid diagrams, and concludes with a **Senior-Level Systems Architect Interview Guide** covering advanced production-grade edge cases.
+This guide details the security best practices for hosting and delivering images using AWS CloudFront, Origin Access Control (OAC), and S3. It contrasts the delivery models of **public images** and **strictly private assets**, illustrates their lifecycles using Mermaid diagrams, and details application-layer proxy protection. It concludes with a **Senior-Level Systems Architect Interview Guide** covering advanced production-grade edge cases.
 
 ---
 
@@ -24,7 +24,6 @@ sequenceDiagram
     participant Lambda as Lambda Resizer (Sharp)
     participant S3 as AWS S3 Bucket (Private)
 
-    Note over Attacker: Attempts DDoS or guesses URL paths
     Attacker->>WAF: GET /uploads/raw/3a8d9b23-7c81-4f9e.jpg?w=137
     
     alt Rate Limit Triggered (>100 req / 5 min from same IP)
@@ -117,7 +116,35 @@ If you use an on-the-fly Lambda image resizer:
 
 ---
 
-## 3. 🔑 Secure Presigned Uploads vs. CloudFront Delivery
+## 3. 🛡️ Next.js API Image Proxy Hardening (Application Layer)
+
+If you are proxying S3 assets and performing on-the-fly resizing inside your Next.js application server rather than an AWS Lambda resizer, you must implement these three protections:
+
+### 1. Strict Path Prefix Constraints (Prevent Bucket Disclosure)
+* **The Vulnerability:** By default, a proxy endpoint like `/api/img/[...key]` fetches files from S3 based on user input. If your S3 bucket also hosts backups, logs, or private user files, an attacker can input paths like `api/img/backups/db.dump` to extract sensitive content.
+* **The Mitigation:** Enforce a strict prefix allowlist:
+  ```typescript
+  const ALLOWED_PREFIXES = ["uploads/raw/", "uploads/thumbnails/", "uploads/dynamic/"];
+  const isPathAllowed = ALLOWED_PREFIXES.some(prefix => s3Key.startsWith(prefix));
+  if (!isPathAllowed) return NextResponse.json({ error: "Access Denied" }, { status: 403 });
+  ```
+
+### 2. Dimension Parameter Whitelisting (DDoS Protection)
+* **The Vulnerability:** Image processing is extremely CPU-bound. If an attacker loops requests from `?w=1` to `?w=2000`, the server is forced to run `sharp` 2000 times, saturating the CPU and crashing your main application thread.
+* **The Mitigation:** Allow only specific, pre-determined sizes in a Set for immediate lookup:
+  ```typescript
+  const ALLOWED_WIDTHS = new Set([40, 100, 150, 225, 300, 450, 600]);
+  if (width !== null && !ALLOWED_WIDTHS.has(width)) {
+    return NextResponse.json({ error: "Unsupported dimensions" }, { status: 400 });
+  }
+  ```
+
+### 3. Conditional GET Support (Save Network Bandwidth)
+* Always read the client's `If-None-Match` header. Compare it to the S3 object ETag. If they match, abort transfer instantly and return an empty `304 Not Modified` response. This prevents CPU-processing cycles and cuts outbound data transfer rates.
+
+---
+
+## 4. 🔑 Secure Presigned Uploads vs. CloudFront Delivery
 
 A secure architecture separates the concerns of **uploads** and **downloads** using different mechanisms.
 
@@ -133,12 +160,12 @@ A secure architecture separates the concerns of **uploads** and **downloads** us
 If you generate presigned URLs for client-side uploads, enforce these rules:
 1. **Explicit HTTP Method:** Restrict the presigned URL to `PUT`. Never use wildcard or `GET` privileges.
 2. **Restrict Key Paths (UUIDs):** The backend must dictate the exact file key prefix (e.g., `uploads/raw/UUID.jpg`). Never let the client choose their upload filename, which could lead to path traversal attacks (e.g., uploading to `../../../index.html` to overwrite static files).
-3. **Content-Length & Type Limits:** Enforce strict file size limits (`content-length-range`) and file type locks (e.g., `image/jpeg`, `image/png`) inside the S3 client configuration to block malicious payload injections.
-4. **Three-Tier Object Verification:** Once uploaded, verify the file on the backend using `HeadObject` (checking size, actual content headers, and active tagging) before allowing it to be mapped to a user profile.
+3. **Cryptographic Content-Length Enforcements:** Force client requests to match the validated size by passing `ContentLength` in the S3 command and adding `content-length` to the `signableHeaders` list of the getSignedUrl configuration. For multipart uploads, calculate and sign the exact size of each chunk to prevent part-size expansion attacks.
+4. **Backend post-upload validation:** Once uploaded, perform a `HeadObject` lookup in the backend to verify the actual size and content-type before saving the record to the database. If validation fails, delete the S3 object immediately.
 
 ---
 
-## 4. 🎓 Senior Systems Architect Interview Q&A
+## 5. 🎓 Senior Systems Architect Interview Q&A
 
 These questions target real-world infrastructure failure modes, architectural trade-offs, and mitigation strategies.
 
@@ -193,3 +220,27 @@ These questions target real-world infrastructure failure modes, architectural tr
 * **UUIDv4 Key Space & Hash Collision Probability:**
   UUIDv4 has 122 bits of randomness. The total number of possible UUIDs is $2^{122} \approx 5.3 \times 10^{36}$. 
   To have a **1 in a billion (1 in $10^9$)** chance of a single collision, you would need to generate **103 trillion UUIDs**. Even at massive scale (e.g., 100k uploads per second), it would take hundreds of years to hit a single collision, ensuring that every user's key path remains mathematically unique and unguessable.
+
+---
+
+### Q5: How do S3 Path constraints and Dimension allowlists protect a Next.js server acting as an image proxy compared to standard unconstrained proxies?
+* **S3 Path Constraints (Prevention of Directory Traversal & Exposure):**
+  If the Next.js server proxy receives a request like `/api/img/database/backup.sql` or `/api/img/../../../etc/passwd` (path traversal), it would attempt to fetch this key from S3 and stream it. By implementing a strict allowlist constraint (e.g., key must start with `uploads/raw/`, `uploads/thumbnails/`, or `uploads/dynamic/`), the server blocks access to critical databases, server configurations, or unrelated user files in the same S3 bucket before contacting S3.
+* **Resizing Dimension Allowlists (Prevention of Resource Exhaustion):**
+  Resizing images using native libraries like `sharp` is a CPU-bound operation. If an attacker makes requests for thousands of different dimensions (e.g. `?w=100`, `?w=101`, ..., `?w=5000`), the Node.js event loop blocks because it spends 100% of its runtime computing image decodes/scales. Restricting the accepted inputs to an explicit Set (e.g. `[40, 100, 300, 600]`) guarantees that the proxy route will return `400 Bad Request` instantly, preventing CPU exhaustion and protecting the responsiveness of other API routes.
+
+---
+
+### Q6: If S3 direct uploads are used, how do we prevent attackers from uploading files that are far larger than our application limits? Explain the cryptographic mechanics at the signature level and post-upload verification.
+* **Cryptographic Enforcements (Content-Length Signing in PUT/Multipart Uploads):**
+  If we generate standard presigned PUT URLs, S3 does not restrict file size unless we sign the `Content-Length` header. To enforce size restrictions:
+  1. The client declares its file size to the backend during the URL request.
+  2. The backend validates the size against a schema (e.g. 5MB maximum).
+  3. The backend specifies this size in the S3 command (e.g., `ContentLength` in `PutObjectCommand` or `UploadPartCommand`) and explicitly adds `"content-length"` to the list of `signableHeaders` in the presigned options.
+  4. S3 Signature Version 4 includes the `Content-Length` header in its cryptographic signature. 
+  5. When the client uploads to S3, S3 recalculates the signature. If the HTTP request body's size (and thus its `Content-Length` header) deviates even by one byte from the signed length, the signature check fails, and S3 rejects the request with `403 SignatureDoesNotMatch`.
+* **Multipart Upload Part-Size signing:**
+  For files uploaded in chunks, we cannot sign a single overall size during initiation because S3 does not check total size during chunk uploads. Instead, we sign the exact expected size of each individual part (e.g., exactly 5MB for parts 1 to N-1, and the remainder for part N) by passing the calculated `ContentLength` and signing `content-length` on the `UploadPartCommand`. This mathematically bounds the sum of the uploaded parts to the exact file size validated during initiation.
+* **Post-Upload Backend Verification (Defense-in-Depth):**
+  To prevent race conditions, stale files, or misconfigurations, the backend performs a `HeadObject` check before saving the upload association in the database. It verifies that the object exists in S3, its size matches the limit (<= 5MB), and its content type is valid. If it fails validation, the backend deletes the object from S3 and throws a validation error.
+

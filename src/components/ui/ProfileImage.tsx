@@ -49,6 +49,9 @@ export interface ProfileImageProps {
   /** Pass priority for above-the-fold images (disables lazy loading) */
   priority?: boolean;
   className?: string;
+  /** Optional custom dimension overrides to demonstrate dynamic resizing */
+  width?: number;
+  height?: number;
 }
 
 /* ─── Variant maps ───────────────────────────────────────────── */
@@ -56,8 +59,8 @@ export interface ProfileImageProps {
 /** Wrapper element classes per variant */
 const WRAPPER_CLS: Record<ProfileImageVariant, string> = {
   avatar: "relative h-10 w-10 shrink-0 overflow-hidden rounded-full ring-2 ring-slate-100",
-  hero: "relative aspect-[4/3] w-full overflow-hidden bg-slate-950",
-  card: "relative aspect-[4/3] w-full overflow-hidden bg-slate-100",
+  hero: "relative aspect-square w-full overflow-hidden bg-slate-950",
+  card: "relative aspect-square w-full overflow-hidden bg-slate-100",
 };
 
 /** next/image sizes hint — tells the browser which breakpoint to pick */
@@ -88,12 +91,32 @@ export const ProfileImage = memo(function ProfileImage({
   variant,
   priority = false,
   className,
+  width,
+  height,
 }: ProfileImageProps) {
   const [state, setState] = useState<LoadState>(src ? "loading" : "error");
 
   // Stable callbacks — never cause a re-render of the parent
   const onLoad = useCallback(() => setState("loaded"), []);
   const onError = useCallback(() => setState("error"), []);
+
+  // Determine resizing dimensions based on variant or explicit overrides
+  const targetWidth = width ?? (variant === "avatar" ? 40 : variant === "card" ? 300 : 600);
+  const targetHeight = height ?? (variant === "avatar" ? 40 : variant === "card" ? 300 : 600);
+
+  // Build the resizing proxy URL (appends w and h query parameters)
+  const safeSrc = src || "";
+  const separator = safeSrc.includes("?") ? "&" : "?";
+  const finalSrc = safeSrc.startsWith("data:")
+    ? safeSrc
+    : safeSrc ? `${safeSrc}${separator}w=${targetWidth}&h=${targetHeight}` : "";
+
+  // Reset load state when source URL changes (e.g. dynamic dimensions are switched in the UI)
+  const [lastSrc, setLastSrc] = useState(finalSrc);
+  if (finalSrc !== lastSrc) {
+    setState("loading");
+    setLastSrc(finalSrc);
+  }
 
   const wrapperCls = cn(WRAPPER_CLS[variant], className);
 
@@ -121,24 +144,20 @@ export const ProfileImage = memo(function ProfileImage({
              the image (via `placeholder="blur"` — see note below),
              then cross-fades to the full image once loaded.
              We also drive our own opacity for the shimmer hand-off.
-      ──────────────────────────────────────────────────────── */}
+       ──────────────────────────────────────────────────────── */}
       <NextImage
-        src={src}
+        src={finalSrc}
         alt={alt}
         fill
         sizes={IMG_SIZES[variant]}
         priority={priority}
+        unoptimized
         /**
          * "blur" placeholder: next/image generates a tiny (8×8px)
          * base64 version of the image server-side and renders it
          * immediately as a CSS background — giving the blur-in effect.
          * We combine this with our shimmer so there's always something
          * visible while the full image loads.
-         *
-         * NOTE: `placeholder="blur"` with external/dynamic src requires
-         * a `blurDataURL`. We use a neutral slate-coloured 1×1 pixel
-         * so the placeholder is always consistent regardless of the
-         * image content, and there's no flash of an unrelated colour.
          */
         placeholder="blur"
         blurDataURL="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mN8+uDVfwAJWgONnMg9EgAAAABJRU5ErkJggg=="

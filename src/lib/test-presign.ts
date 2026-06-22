@@ -23,6 +23,7 @@ async function main() {
   const url = await S3Service.createPutUrl({
     key: "uploads/raw/test-headers.jpg",
     contentType: "image/jpeg",
+    contentLength: 1024,
     contentMd5: "1B2M2Y8AsgTpgAmY7PhCfg==",
   });
   console.log("Presigned URL:", url);

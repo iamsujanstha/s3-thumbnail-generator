@@ -9,7 +9,7 @@ export type S3UploadStep =
   | "uploading"
   | "saving"; // multipart completion
 
-const MAX_FILE_SIZE = 200 * 1024 * 1024;
+const MAX_FILE_SIZE = 5 * 1024 * 1024;
 const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 export function useS3Upload() {

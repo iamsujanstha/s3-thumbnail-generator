@@ -6,13 +6,33 @@ export const runtime = "nodejs";
 
 type Ctx = { params: { key: string[] } };
 
+// Production-grade security: Strict allowlist of target resizing dimensions to prevent CPU exhaustion/billing attacks
+const ALLOWED_WIDTHS = new Set([40, 100, 150, 225, 300, 450, 600]);
+const ALLOWED_HEIGHTS = new Set([40, 100, 150, 225, 300, 450, 600]);
+
+// Production-grade security: Strict S3 path prefixes allowed to be read via the proxy to prevent bucket directory leakage
+const ALLOWED_PREFIXES = ["uploads/raw/", "uploads/thumbnails/", "uploads/dynamic/"];
+
 export async function GET(req: Request, { params }: Ctx) {
   const s3Key = params.key.join("/");
   if (!s3Key) return NextResponse.json({ error: "Missing key." }, { status: 400 });
 
+  // 1. Path prefix restriction (prevent access to raw private configs/backups inside S3)
+  const isPathAllowed = ALLOWED_PREFIXES.some((prefix) => s3Key.startsWith(prefix));
+  if (!isPathAllowed) {
+    console.warn(`[img-proxy] Blocked unauthorized S3 key access attempt: ${s3Key}`);
+    return NextResponse.json({ error: "Access Denied: Unauthorized key path." }, { status: 403 });
+  }
+
   const { searchParams } = new URL(req.url);
   const width = parseInt(searchParams.get("w") || "") || null;
   const height = parseInt(searchParams.get("h") || "") || null;
+
+  // 2. Dynamic parameter validation (prevent CPU-burn DDoS by restricting resizing bounds)
+  if ((width !== null && !ALLOWED_WIDTHS.has(width)) || (height !== null && !ALLOWED_HEIGHTS.has(height))) {
+    console.warn(`[img-proxy] Blocked unauthorized resize dimensions w=${width}, h=${height}`);
+    return NextResponse.json({ error: "Access Denied: Unsupported dimensions." }, { status: 400 });
+  }
 
   const ifNoneMatch = req.headers.get("if-none-match");
   
